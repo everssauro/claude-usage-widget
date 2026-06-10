@@ -69,7 +69,7 @@ function shortModels(models) {
 const el = {};
 function cache() {
   for (const id of [
-    "card", "mascot", "mascotBig", "expandBtn", "closeBtn", "creatureBack",
+    "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
     "curPct", "curBar", "curReset", "wkPct", "wkBar", "wkReset",
     "statusText", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens",
   ]) {
@@ -146,8 +146,11 @@ let baseBeforeCreature = "compact";
 
 async function resizeWindow(w, h) {
   try {
-    const W = window.__TAURI__.window;
-    await W.getCurrentWindow().setSize(new W.LogicalSize(w, h));
+    const T = window.__TAURI__;
+    // LogicalSize lives in __TAURI__.dpi (not .window) — using the wrong module
+    // made setSize throw, so the window never grew and the info panel clipped.
+    const LogicalSize = (T.dpi && T.dpi.LogicalSize) || T.window.LogicalSize;
+    await T.window.getCurrentWindow().setSize(new LogicalSize(w, h));
   } catch {
     /* not in Tauri (headless) */
   }
@@ -180,6 +183,21 @@ function closeApp() {
   } catch {
     /* headless */
   }
+}
+
+// Pin = always-on-top ("popover over windows"). Toggled by the header pin button,
+// remembered in localStorage. Default pinned (current desk-widget behavior).
+let pinned = true;
+async function applyPinned(on) {
+  pinned = on;
+  try {
+    await window.__TAURI__.window.getCurrentWindow().setAlwaysOnTop(on);
+  } catch {
+    /* headless */
+  }
+  el.pinBtn.classList.toggle("active", on);
+  el.pinBtn.title = on ? "floating on top — click to unpin" : "pin on top";
+  localStorage.setItem("cuw-pinned", on ? "1" : "0");
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +319,8 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   el.creatureBack.addEventListener("click", () => setView(baseBeforeCreature));
   el.closeBtn.addEventListener("click", closeApp);
+  el.pinBtn.addEventListener("click", () => applyPinned(!pinned));
+  applyPinned(localStorage.getItem("cuw-pinned") !== "0"); // default on
 
   refresh();
   setInterval(refresh, POLL_MS);

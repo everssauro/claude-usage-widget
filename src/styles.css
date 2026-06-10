@@ -116,6 +116,16 @@ body {
 .card:hover .hbtn.close {
   opacity: 1;
 }
+.hbtn.pin {
+  display: flex;
+  align-items: center;
+}
+.hbtn.pin svg {
+  display: block;
+}
+.hbtn.pin.active {
+  color: var(--accent); /* pinned (floating on top) */
+}
 
 /* ---- meters ---- */
 .meters {

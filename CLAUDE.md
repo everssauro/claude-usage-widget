@@ -9,7 +9,7 @@ Features: Current (5h) + Weekly (7d) usage % with heat bars + reset timers; anim
 
 ## Data — two sources
 - **Primary: rate-limit % (`get_usage`)** — reads the Claude Code OAuth token from the macOS **Keychain** (`security find-generic-password -s "Claude Code-credentials"`; fallback `~/.claude/.credentials.json`), POSTs one minimal `/v1/messages` (`anthropic-beta: oauth-2025-04-20`, haiku, max_tokens 1), reads response headers `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}` + `-5h-status`. **Subscription auth, not API-billed.** Pure header parser is unit-tested. Polls every 30s.
-- **Secondary: cost (`get_cost`)** — runs `ccusage blocks --active --json` → `costUSD`/`burnRate.costPerHour`/`projection.totalCost`/`models`/`tokenCounts`. Only polled while the info panel is open. (`costUSD` needs explicit serde `rename` — uppercase acronym.)
+- **Secondary: cost (`get_cost`)** — runs `ccusage@14 blocks --active --json` → `costUSD`/`burnRate.costPerHour`/`projection.totalCost`/`models`/`tokenCounts`. Only polled while the info panel is open. (`costUSD` needs explicit serde `rename` — uppercase acronym.) **Pinned to `@14`**: v15+ ships a native binary that crashes with a nix-libiconv `dyld` error on this Mac; v14 is the last pure-JS release.
 
 ## Build / run
 - Prereqs: **Rust** (rustup, `cargo 1.96`; non-login shells: `source "$HOME/.cargo/env"`), Xcode CLT, Node v22, ccusage reachable via `npx`.
@@ -23,6 +23,7 @@ Features: Current (5h) + Weekly (7d) usage % with heat bars + reset timers; anim
 - **macOS PATH**: a Finder-launched `.app` only inherits `/usr/bin:/bin:...` — `usage.rs::resolve_program()`/`extra_node_dirs()` resolve `npx` to an absolute path (nvm + homebrew) so the bundled app finds node.
 - **set_position is LOGICAL points**, not physical pixels — mixing physical on Retina hides the window off-screen. `lib.rs::top_right_pos` converts via `scale_factor`. Verify window placement with `CGWindowListCopyWindowInfo` (JXA): expect `X≈2264, onscreen=true`.
 - First `.app` launch may prompt to allow Keychain access → **Allow**.
+- **Window commands need capability permissions**: JS `setSize`/`setAlwaysOnTop`/`close` silently fail unless granted in `src-tauri/capabilities/default.json` (`core:window:allow-set-size`, `-set-always-on-top`, `-close`) — `core:default` does NOT include them. This was why the info panel didn't resize.
 
 ## Architecture
 - `src-tauri/src/usage.rs` — `get_usage` (rate-limit %, pure `parse_rate_limit`) + `get_cost` (ccusage, pure `parse_cost`) + Keychain token read + PATH resolution. All parsers unit-tested against `tests/fixtures/{active,idle}.json`.

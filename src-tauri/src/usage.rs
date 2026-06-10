@@ -365,7 +365,10 @@ fn resolve_program(program: &str) -> String {
 #[tauri::command]
 pub fn get_cost() -> CostView {
     let cmd_str =
-        std::env::var("CCUSAGE_CMD").unwrap_or_else(|_| "npx -y ccusage@latest".to_string());
+        // Pinned to @14: v15+ ships a native (Bun-compiled) binary that, on some
+        // Macs, hardcodes a nonexistent nix libiconv path and crashes (dyld). v14
+        // is the last pure-JS release and runs fine via node. Override with CCUSAGE_CMD.
+        std::env::var("CCUSAGE_CMD").unwrap_or_else(|_| "npx -y ccusage@14".to_string());
     let mut parts = cmd_str.split_whitespace();
     let Some(program) = parts.next() else {
         return CostView::Error {
