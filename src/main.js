@@ -1,0 +1,318 @@
+const { invoke } = window.__TAURI__.core;
+
+const POLL_MS = 30_000;
+
+const ANIMS = [
+  "idle_breathe",
+  "idle_blink",
+  "idle_look_around",
+  "expression_wink",
+  "expression_surprise",
+  "expression_sleep",
+  "work_think",
+  "work_coding",
+  "dance_sway",
+  "dance_bounce",
+  "dance_sway_dj",
+  "dance_bounce_dj",
+  "dance_djmix",
+].map((n) => `${n}.json`);
+
+const BAND_ANIM = [
+  "idle_breathe",
+  "work_think",
+  "work_coding",
+  "dance_bounce",
+  "dance_djmix",
+].map((n) => `${n}.json`);
+
+const STATUS_WORDS = [
+  "Divining…",
+  "Baking…",
+  "Brewing…",
+  "Pondering…",
+  "Summoning…",
+  "Conjuring…",
+  "Percolating…",
+  "Ruminating…",
+];
+
+const SIZES = { compact: [280, 300], info: [280, 470], creature: [280, 300] };
+
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+const bandFor = (pct) =>
+  pct < 30 ? 0 : pct < 55 ? 1 : pct < 75 ? 2 : pct < 90 ? 3 : 4;
+
+const heat = (pct) => `hsl(${90 - (clamp(pct, 0, 100) / 100) * 90} 55% 48%)`;
+
+function fmtReset(min) {
+  if (min <= 0) return "Resetting…";
+  const d = Math.floor(min / 1440);
+  const h = Math.floor((min % 1440) / 60);
+  const m = min % 60;
+  if (d > 0) return `Resets in ${d}d ${h}h`;
+  if (h > 0) return `Resets in ${h}h ${m}m`;
+  return `Resets in ${m}m`;
+}
+
+function fmtBig(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
+  return String(n);
+}
+
+function shortModels(models) {
+  const s = new Set((models || []).map((m) => m.replace(/^claude-/, "").replace(/-\d.*$/, "")));
+  return [...s].join(" · ") || "—";
+}
+
+const el = {};
+function cache() {
+  for (const id of [
+    "card", "mascot", "mascotBig", "expandBtn", "closeBtn", "creatureBack",
+    "curPct", "curBar", "curReset", "wkPct", "wkBar", "wkReset",
+    "statusText", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens",
+  ]) {
+    el[id] = document.getElementById(id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mascot animation engine — palette-indexed 20×20 frames; draws to anim.canvas.
+// ---------------------------------------------------------------------------
+const anim = { file: null, frames: [], palette: [], idx: 0, timer: null, canvas: null };
+
+function drawFrame(frame) {
+  if (!anim.canvas) return;
+  const ctx = anim.canvas.getContext("2d");
+  ctx.clearRect(0, 0, 20, 20);
+  for (let y = 0; y < frame.grid.length; y++) {
+    const row = frame.grid[y];
+    for (let x = 0; x < row.length; x++) {
+      const color = anim.palette[row[x]];
+      if (!color || color === "transparent") continue;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+function redraw() {
+  if (anim.frames[anim.idx]) drawFrame(anim.frames[anim.idx]);
+}
+
+function setCanvas(canvasEl) {
+  if (anim.canvas && anim.canvas !== canvasEl) {
+    anim.canvas.getContext("2d").clearRect(0, 0, 20, 20);
+  }
+  anim.canvas = canvasEl;
+  redraw();
+}
+
+function playStep() {
+  if (!anim.frames.length) return;
+  const frame = anim.frames[anim.idx];
+  drawFrame(frame);
+  anim.idx = (anim.idx + 1) % anim.frames.length;
+  anim.timer = setTimeout(playStep, frame.hold || 120);
+}
+
+async function setAnim(file) {
+  if (file === anim.file) return;
+  anim.file = file;
+  try {
+    const data = await (await fetch(`/assets/animations/${file}`)).json();
+    anim.frames = data.frames || [];
+    anim.palette = data.palette || ["transparent", "#CD7F6A", "#0f0f0f"];
+    anim.idx = 0;
+    if (anim.timer) clearTimeout(anim.timer);
+    playStep();
+  } catch {
+    /* keep previous animation */
+  }
+}
+
+function cycleAnim() {
+  const i = ANIMS.indexOf(anim.file);
+  anim.file = null; // force reload onto the (possibly new) canvas
+  setAnim(ANIMS[(i + 1) % ANIMS.length]);
+}
+
+// ---------------------------------------------------------------------------
+// View state machine: compact | info | creature
+// ---------------------------------------------------------------------------
+let view = "compact";
+let baseBeforeCreature = "compact";
+
+async function resizeWindow(w, h) {
+  try {
+    const W = window.__TAURI__.window;
+    await W.getCurrentWindow().setSize(new W.LogicalSize(w, h));
+  } catch {
+    /* not in Tauri (headless) */
+  }
+}
+
+async function setView(mode) {
+  const prev = view;
+  view = mode;
+  el.card.dataset.view = mode;
+  resizeWindow(...SIZES[mode]);
+
+  mode === "info" ? startCost() : stopCost();
+
+  if (mode === "creature") {
+    setCanvas(el.mascotBig);
+    setAnim("idle_breathe.json");
+  } else if (prev === "creature") {
+    setCanvas(el.mascot);
+    const b = lastActive ? bandFor(lastActive.current_pct) : 0;
+    lastBand = b;
+    anim.file = null;
+    setAnim(BAND_ANIM[b]);
+  }
+  el.expandBtn.textContent = mode === "info" ? "⤡" : "⤢";
+}
+
+function closeApp() {
+  try {
+    window.__TAURI__.window.getCurrentWindow().close();
+  } catch {
+    /* headless */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cost data (ccusage) — only polled while the info panel is open.
+// ---------------------------------------------------------------------------
+let costTimer = null;
+
+function startCost() {
+  if (costTimer) return;
+  refreshCost();
+  costTimer = setInterval(refreshCost, POLL_MS);
+}
+function stopCost() {
+  if (costTimer) {
+    clearInterval(costTimer);
+    costTimer = null;
+  }
+}
+async function refreshCost() {
+  try {
+    renderCost(await invoke("get_cost"));
+  } catch (e) {
+    renderCost({ state: "error", message: String(e) });
+  }
+}
+function renderCost(c) {
+  const dash = () => {
+    el.dCost.textContent = el.dBurn.textContent = el.dProj.textContent = el.dTokens.textContent = "—";
+  };
+  if (c.state === "active") {
+    el.dCost.textContent = `$${c.cost_usd.toFixed(2)}`;
+    el.dBurn.textContent = `$${c.cost_per_hour.toFixed(1)}/h`;
+    el.dProj.textContent = `$${c.projected_cost.toFixed(2)}`;
+    el.dModels.textContent = shortModels(c.models);
+    el.dTokens.textContent = fmtBig(c.total_tokens);
+  } else if (c.state === "idle") {
+    dash();
+    el.dModels.textContent = "no active block";
+  } else {
+    dash();
+    el.dModels.textContent = "ccusage error";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Usage data (rate-limit %) — drives bars + band animation.
+// ---------------------------------------------------------------------------
+let lastBand = -1;
+let statusIdx = 0;
+let lastActive = null;
+
+const setStale = (on) => (el.card.dataset.stale = on ? "true" : "false");
+
+function renderActive(u) {
+  el.curPct.textContent = `${u.current_pct}%`;
+  el.curBar.style.width = `${clamp(u.current_pct, 0, 100)}%`;
+  el.curBar.style.background = heat(u.current_pct);
+  el.curReset.textContent = fmtReset(u.current_reset_min);
+
+  el.wkPct.textContent = `${u.weekly_pct}%`;
+  el.wkBar.style.width = `${clamp(u.weekly_pct, 0, 100)}%`;
+  el.wkBar.style.background = heat(u.weekly_pct);
+  el.wkReset.textContent = fmtReset(u.weekly_reset_min);
+
+  el.statusText.textContent =
+    u.current_pct >= 100 ? "Tapped out…" : STATUS_WORDS[statusIdx % STATUS_WORDS.length];
+
+  if (view !== "creature") {
+    const b = bandFor(u.current_pct);
+    if (b !== lastBand) {
+      setAnim(BAND_ANIM[b]);
+      lastBand = b;
+    }
+  }
+  el.card.dataset.state = "active";
+}
+
+function showDegraded(message) {
+  if (lastActive) {
+    renderActive(lastActive);
+    setStale(true);
+  } else {
+    el.card.dataset.state = "error";
+    el.errMsg.textContent = message ?? "";
+  }
+}
+
+function render(data) {
+  if (data.state === "active") {
+    lastActive = data;
+    statusIdx++;
+    renderActive(data);
+    setStale(false);
+  } else {
+    showDegraded(data.message);
+  }
+}
+
+async function refresh() {
+  try {
+    render(await invoke("get_usage"));
+  } catch (e) {
+    showDegraded(String(e));
+  }
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  cache();
+  setCanvas(el.mascot);
+  setAnim("idle_breathe.json");
+
+  el.mascot.addEventListener("click", () => {
+    baseBeforeCreature = view === "info" ? "info" : "compact";
+    setView("creature");
+  });
+  el.mascotBig.addEventListener("click", cycleAnim);
+  el.expandBtn.addEventListener("click", () => {
+    setView(view === "info" ? "compact" : "info");
+  });
+  el.creatureBack.addEventListener("click", () => setView(baseBeforeCreature));
+  el.closeBtn.addEventListener("click", closeApp);
+
+  refresh();
+  setInterval(refresh, POLL_MS);
+});
+
+// Test hooks for headless rendering.
+window.__cuwRender = (data) => {
+  cache();
+  render(data);
+};
+window.__cuwRenderCost = (c) => {
+  cache();
+  el.card.dataset.view = "info";
+  renderCost(c);
+};

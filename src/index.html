@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Usage Widget</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Whole card drags (deep); <button>s block drag naturally; the mascot
+         canvas opts out with ="false" so its clicks fire. -->
+    <main
+      id="card"
+      class="card"
+      data-state="loading"
+      data-view="compact"
+      data-tauri-drag-region="deep"
+    >
+      <header class="head">
+        <canvas
+          id="mascot"
+          class="mascot"
+          width="20"
+          height="20"
+          title="click: creature mode"
+          data-tauri-drag-region="false"
+        ></canvas>
+        <h1 class="title">Usage</h1>
+        <span id="staleDot" class="stale-dot" title="showing last value"></span>
+        <button id="expandBtn" class="hbtn" title="details">⤢</button>
+        <button id="closeBtn" class="hbtn close" title="close">✕</button>
+      </header>
+
+      <section class="meters">
+        <div class="meter">
+          <div class="meter-top">
+            <span id="curPct" class="pct">—</span>
+            <span class="pill">Current</span>
+          </div>
+          <div class="bar"><div id="curBar" class="bar-fill"></div></div>
+          <span id="curReset" class="reset">—</span>
+        </div>
+
+        <div class="meter">
+          <div class="meter-top">
+            <span id="wkPct" class="pct">—</span>
+            <span class="pill">Weekly</span>
+          </div>
+          <div class="bar"><div id="wkBar" class="bar-fill"></div></div>
+          <span id="wkReset" class="reset">—</span>
+        </div>
+      </section>
+
+      <!-- Expanded detail panel (info view) — fed by ccusage -->
+      <section class="detail">
+        <div class="drow"><span class="dl">Cost</span><span id="dCost" class="dv">—</span></div>
+        <div class="drow"><span class="dl">Burn</span><span id="dBurn" class="dv">—</span></div>
+        <div class="drow"><span class="dl">Projected</span><span id="dProj" class="dv">—</span></div>
+        <div class="drow"><span class="dl">Models</span><span id="dModels" class="dv">—</span></div>
+        <div class="drow"><span class="dl">Tokens</span><span id="dTokens" class="dv">—</span></div>
+      </section>
+
+      <footer class="status">
+        <span class="star">✻</span> <span id="statusText">Divining…</span>
+      </footer>
+
+      <!-- Creature mode: big idle Clawd; click changes figure -->
+      <div class="creature">
+        <canvas
+          id="mascotBig"
+          class="mascot-big"
+          width="20"
+          height="20"
+          title="click to change figure"
+          data-tauri-drag-region="false"
+        ></canvas>
+        <span class="creature-hint">click to change</span>
+        <button id="creatureBack" class="hbtn back" title="back">↩</button>
+      </div>
+
+      <!-- Data-state overlays -->
+      <div class="overlay overlay-loading"><span class="spinner"></span></div>
+      <div class="overlay overlay-error">
+        <span class="err-title">no signal</span>
+        <span id="errMsg" class="err-msg"></span>
+      </div>
+    </main>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

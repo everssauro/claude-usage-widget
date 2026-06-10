@@ -1,31 +1,36 @@
 # claude-usage-widget
 
-Native macOS desktop widget showing live Claude Code usage (current 5h block). Tauri v2 (Rust + web UI). Data from `ccusage`.
+Native macOS desktop widget — a **faithful Clawdmeter clone** showing live Claude Code **subscription** usage. Tauri v2 (Rust + vanilla web UI).
 
-## ▶ Start here (first build session)
-This project is **designed but not implemented**. To build it:
-1. Read `docs/spec.md` (the approved design) and `docs/implementation-plan.md` (6 phases).
-2. Do **Phase 0** first — install prereqs (**Rust/rustup is NOT installed yet**; Tauri needs it).
-3. Then execute the plan **phase by phase, verifying each** before moving on.
-4. Asset rule (legal): original assets only — **no Clawd mascot, no Anthropic proprietary fonts** (see `REFERENCE.md`).
+## ▶ Status (2026-06-10)
+Working `.app`, verified on-screen with real data. Repo: `everssauro/claude-usage-widget` — **PRIVATE, must stay private** (bundles the copyrighted Clawd mascot + proprietary Anthropic fonts — see `REFERENCE.md`, DECISION 2026-06-10, which deliberately reversed the original clean-room rule).
 
-Origin: independent project inspired by Clawdmeter (credit in `REFERENCE.md`). Repo: `everssauro/claude-usage-widget` (private).
+Features: Current (5h) + Weekly (7d) usage % with heat bars + reset timers; animated Clawd mascot (13 ClaudePix animations, busier as usage climbs); **⤢ expand** → detail panel (cost/burn/projection/models/tokens via ccusage); **click mascot → creature mode** (big idle Clawd, click cycles figure, ↩ back); **✕** (hover) closes; whole card draggable, **remembers position**; Clawd app icon.
+
+## Data — two sources
+- **Primary: rate-limit % (`get_usage`)** — reads the Claude Code OAuth token from the macOS **Keychain** (`security find-generic-password -s "Claude Code-credentials"`; fallback `~/.claude/.credentials.json`), POSTs one minimal `/v1/messages` (`anthropic-beta: oauth-2025-04-20`, haiku, max_tokens 1), reads response headers `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}` + `-5h-status`. **Subscription auth, not API-billed.** Pure header parser is unit-tested. Polls every 30s.
+- **Secondary: cost (`get_cost`)** — runs `ccusage blocks --active --json` → `costUSD`/`burnRate.costPerHour`/`projection.totalCost`/`models`/`tokenCounts`. Only polled while the info panel is open. (`costUSD` needs explicit serde `rename` — uppercase acronym.)
 
 ## Build / run
-- Prereqs: **Rust** (rustup — NOT yet installed on the dev Mac), **Xcode CLT**, **Node** (v22 ✓), **ccusage** (`npx -y ccusage@latest blocks --active --json` must return JSON).
-- Dev: `npm run tauri dev` · Build: `npm run tauri build` (→ `.app` in `src-tauri/target/release/bundle/macos/`).
+- Prereqs: **Rust** (rustup, `cargo 1.96`; non-login shells: `source "$HOME/.cargo/env"`), Xcode CLT, Node v22, ccusage reachable via `npx`.
+- Dev: `npm run tauri dev` · Build: `npm run tauri build` (→ `.app`/`.dmg` in `src-tauri/target/release/bundle/`).
+- Test: `cargo test --manifest-path src-tauri/Cargo.toml` — 10 unit tests (rate-limit parser, token extraction, ccusage cost parser) are the gate.
+- Icon: render a Clawd frame to a 1024 PNG (PIL, see git history) → `npm run tauri icon <png>`.
+- `CCUSAGE_CMD` / `CLAUDE_CODE_TOKEN` env overrides (the latter handy for headless testing without the Keychain).
+
+### ⚠️ This dev machine's gotchas
+- **iCloud-synced `~/Desktop`** corrupts the shell cwd inode mid-session → `getcwd`/`uv_cwd` EPERM for spawned binaries (cargo/npm/node/python). **Workaround: prefix build/run commands with `cd /` and use absolute paths** (e.g. `cd / && npm --prefix <abs> run tauri -- build`). A fresh terminal also resets it. Long-term fix: move the repo out of `~/Desktop`.
+- **macOS PATH**: a Finder-launched `.app` only inherits `/usr/bin:/bin:...` — `usage.rs::resolve_program()`/`extra_node_dirs()` resolve `npx` to an absolute path (nvm + homebrew) so the bundled app finds node.
+- **set_position is LOGICAL points**, not physical pixels — mixing physical on Retina hides the window off-screen. `lib.rs::top_right_pos` converts via `scale_factor`. Verify window placement with `CGWindowListCopyWindowInfo` (JXA): expect `X≈2264, onscreen=true`.
+- First `.app` launch may prompt to allow Keychain access → **Allow**.
 
 ## Architecture
-- `src-tauri/` (Rust): window config (floating, always-on-top, transparent, no chrome, draggable, ~280×150, skipTaskbar) + `#[tauri::command] get_usage()` that runs ccusage, parses JSON, returns a typed view model. Parser is unit-tested with fixture JSON.
-- `src/` (web UI): vanilla HTML/CSS/JS. Renders cost, burn-rate (heat color), time bar, projection, models. States: loading / idle / error. Polls `get_usage` every 10s.
-- Data brain = **ccusage** (we don't recompute usage).
+- `src-tauri/src/usage.rs` — `get_usage` (rate-limit %, pure `parse_rate_limit`) + `get_cost` (ccusage, pure `parse_cost`) + Keychain token read + PATH resolution. All parsers unit-tested against `tests/fixtures/{active,idle}.json`.
+- `src-tauri/src/lib.rs` — window config + `top_right_pos` (logical, origin-monitor) + **position persistence** (`window.json` in `app_config_dir`, saved on `WindowEvent::Moved`, restored in `setup`).
+- `src/` (vanilla HTML/CSS/JS) — view state machine `compact|info|creature` (`data-view`), `data-state` overlays, canvas **animation engine** (palette-indexed 20×20 frames from `src/assets/animations/*.json`), `setSize` on view change. Drag via `data-tauri-drag-region="deep"` (buttons block naturally; mascot canvas opts out with `="false"`). Test hooks `__cuwRender`/`__cuwRenderCost`.
+- Assets: `src/assets/fonts/` (Tiempos, StyreneB), `src/assets/animations/` (13 Clawd JSON) — from upstream Clawdmeter (private use).
 
-## Design docs (read before coding)
-- `docs/spec.md` — approved design.
-- `docs/implementation-plan.md` — phased build steps. **Follow in order, verify each phase.**
-- `REFERENCE.md` — origin credit + **asset rule: no Clawd mascot, no Anthropic proprietary fonts**.
-
-## Conventions
-- Reuse the hard part (usage calc) via ccusage; only build the thin UI shell.
-- Keep it MVP: active-block widget only. No history/menu-bar/settings yet (YAGNI).
-- Original assets only (legal — see REFERENCE.md).
+## Docs
+- `REFERENCE.md` — origin credit + the DECISION 2026-06-10 (faithful clone, private-only).
+- `docs/spec.md`, `docs/implementation-plan.md` — original (cost-based MVP) history; superseded by the rate-limit clone.
+- `docs/screenshots/` — compact / info-expanded / creature.

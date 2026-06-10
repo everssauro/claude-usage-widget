@@ -17,10 +17,17 @@ Inspired by **[HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Cl
 npx -y ccusage@latest blocks --active --json
 ```
 
-## ⚠️ Legal — why this is a clean repo, not a fork
-Upstream's README says it bundles **proprietary Anthropic fonts** + the **copyrighted Clawd mascot**, used **without permission**, and is **intentionally not licensed**. So:
-- This repo carries **none of upstream's code or assets** — it's independent, started clean, credit-only.
-- Our app must use **free/system fonts** (`system-ui`, SF Mono) and an **original glyph/mark** — never the Clawd mascot or Anthropic proprietary fonts.
+## ⚠️ Legal background
+Upstream's README says it bundles **proprietary Anthropic fonts** + the **copyrighted Clawd mascot**, used **without permission**, and is **intentionally not licensed**. The original design intent here was a clean-room homage with original assets only.
+
+## 🔴 DECISION 2026-06-10 — faithful clone, PRIVATE ONLY (overrides the clean-room rule)
+The owner chose a **faithful Clawdmeter clone**: use the **Clawd mascot pixel animations** (from `claudepix.vercel.app`, by [@amaanbuilds](https://x.com/amaanbuilds)) and the **proprietary Anthropic fonts** (TiemposText, StyreneB), copied from upstream's `assets/`.
+
+Consequences / guardrails:
+- **This repo MUST stay PRIVATE.** These assets are copyrighted/unlicensed; distribution (public repo, releasing the `.app`) is **not** authorized. Personal/local use only.
+- If a public release is ever wanted: strip the proprietary fonts + Clawd mascot and substitute originals (the clean-homage path), **or** deliberately fork upstream and inherit its (un)licensing — a conscious decision at that point.
+- Data source also changed: live **Claude Code OAuth rate-limit %** (subscription, not API-billed), not just `ccusage`. See `CLAUDE.md`.
+- Earlier original assets (the meter glyph/icon) are retained in git history if we ever revert to clean-room.
 
 ## If we ever want a PUBLIC fork later
 Per Ton's plan: if a public release is wanted, fork `HermannBjorgvin/Clawdmeter` on GitHub and place our code there as a fork of his — done deliberately at that point, not now. Keeping this repo independent/private keeps options open and clean.
