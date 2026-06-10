@@ -2,6 +2,15 @@
 
 Native macOS desktop widget showing live Claude Code usage (current 5h block). Tauri v2 (Rust + web UI). Data from `ccusage`.
 
+## ▶ Start here (first build session)
+This project is **designed but not implemented**. To build it:
+1. Read `docs/spec.md` (the approved design) and `docs/implementation-plan.md` (6 phases).
+2. Do **Phase 0** first — install prereqs (**Rust/rustup is NOT installed yet**; Tauri needs it).
+3. Then execute the plan **phase by phase, verifying each** before moving on.
+4. Asset rule (legal): original assets only — **no Clawd mascot, no Anthropic proprietary fonts** (see `REFERENCE.md`).
+
+Origin: independent project inspired by Clawdmeter (credit in `REFERENCE.md`). Repo: `everssauro/claude-usage-widget` (private).
+
 ## Build / run
 - Prereqs: **Rust** (rustup — NOT yet installed on the dev Mac), **Xcode CLT**, **Node** (v22 ✓), **ccusage** (`npx -y ccusage@latest blocks --active --json` must return JSON).
 - Dev: `npm run tauri dev` · Build: `npm run tauri build` (→ `.app` in `src-tauri/target/release/bundle/macos/`).
