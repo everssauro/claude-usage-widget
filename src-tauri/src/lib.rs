@@ -60,25 +60,46 @@ fn save_position(app: &AppHandle, pos: LogicalPosition<f64>) {
     }
 }
 
-/// Make the widget PiP-style: visible on **every Space** and floating **over
-/// fullscreen apps** (like a Picture-in-Picture video). Sets the NSWindow
-/// collectionBehavior to `CanJoinAllSpaces | FullScreenAuxiliary`.
+/// PiP mode (the pin toggle): when `on`, the widget is visible on **every
+/// Space**, floats **over fullscreen apps**, and stays **on top** — like a
+/// Picture-in-Picture video. When `off`, it's a normal window on the current
+/// Space. Driven via raw NSWindow `collectionBehavior` + `level` because
+/// changing collectionBehavior resets the level, so both must be set together.
 #[cfg(target_os = "macos")]
-fn enable_pip(window: &tauri::WebviewWindow) {
+fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
     use objc::{msg_send, runtime::Object, sel, sel_impl};
     if let Ok(ptr) = window.ns_window() {
         let ns_window = ptr as *mut Object;
         const CAN_JOIN_ALL_SPACES: u64 = 1 << 0;
         const FULLSCREEN_AUXILIARY: u64 = 1 << 8;
-        let behavior = CAN_JOIN_ALL_SPACES | FULLSCREEN_AUXILIARY;
+        // collectionBehavior controls Spaces + fullscreen participation.
+        let behavior: u64 = if on {
+            CAN_JOIN_ALL_SPACES | FULLSCREEN_AUXILIARY
+        } else {
+            0
+        };
         unsafe {
             let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
         }
     }
+    // Re-assert the window level via Tauri. Changing collectionBehavior resets
+    // the level, and set_always_on_top is a no-op when the state is unchanged —
+    // so toggle to the opposite first to force the OS call to re-apply.
+    let _ = window.set_always_on_top(!on);
+    let _ = window.set_always_on_top(on);
 }
 
 #[cfg(not(target_os = "macos"))]
-fn enable_pip(_window: &tauri::WebviewWindow) {}
+fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
+    let _ = window.set_always_on_top(!on);
+    let _ = window.set_always_on_top(on);
+}
+
+/// Toggle PiP mode from the frontend (the pin button).
+#[tauri::command]
+fn set_pinned(window: tauri::WebviewWindow, on: bool) {
+    apply_pip(&window, on);
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -98,7 +119,7 @@ pub fn run() {
                     }
                 }
                 let _ = window.set_focus();
-                enable_pip(&window);
+                apply_pip(&window, true); // PiP on by default; JS reconciles via localStorage
             }
             Ok(())
         })
@@ -110,7 +131,11 @@ pub fn run() {
                 save_position(window.app_handle(), logical);
             }
         })
-        .invoke_handler(tauri::generate_handler![usage::get_usage, usage::get_cost])
+        .invoke_handler(tauri::generate_handler![
+            usage::get_usage,
+            usage::get_cost,
+            set_pinned
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

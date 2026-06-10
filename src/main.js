@@ -185,18 +185,20 @@ function closeApp() {
   }
 }
 
-// Pin = always-on-top ("popover over windows"). Toggled by the header pin button,
-// remembered in localStorage. Default pinned (current desk-widget behavior).
+// Pin = PiP mode: float on top, on every Space, over fullscreen apps. Toggled by
+// the header pin button, remembered in localStorage. Default on.
 let pinned = true;
 async function applyPinned(on) {
   pinned = on;
   try {
-    await window.__TAURI__.window.getCurrentWindow().setAlwaysOnTop(on);
+    await invoke("set_pinned", { on });
   } catch {
     /* headless */
   }
   el.pinBtn.classList.toggle("active", on);
-  el.pinBtn.title = on ? "floating on top — click to unpin" : "pin on top";
+  el.pinBtn.title = on
+    ? "floating popover (all desktops) — click to unpin"
+    : "click to float on all desktops";
   localStorage.setItem("cuw-pinned", on ? "1" : "0");
 }
 
