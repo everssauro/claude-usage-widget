@@ -60,6 +60,26 @@ fn save_position(app: &AppHandle, pos: LogicalPosition<f64>) {
     }
 }
 
+/// Make the widget PiP-style: visible on **every Space** and floating **over
+/// fullscreen apps** (like a Picture-in-Picture video). Sets the NSWindow
+/// collectionBehavior to `CanJoinAllSpaces | FullScreenAuxiliary`.
+#[cfg(target_os = "macos")]
+fn enable_pip(window: &tauri::WebviewWindow) {
+    use objc::{msg_send, runtime::Object, sel, sel_impl};
+    if let Ok(ptr) = window.ns_window() {
+        let ns_window = ptr as *mut Object;
+        const CAN_JOIN_ALL_SPACES: u64 = 1 << 0;
+        const FULLSCREEN_AUXILIARY: u64 = 1 << 8;
+        let behavior = CAN_JOIN_ALL_SPACES | FULLSCREEN_AUXILIARY;
+        unsafe {
+            let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enable_pip(_window: &tauri::WebviewWindow) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -78,6 +98,7 @@ pub fn run() {
                     }
                 }
                 let _ = window.set_focus();
+                enable_pip(&window);
             }
             Ok(())
         })

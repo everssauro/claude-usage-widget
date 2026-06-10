@@ -24,3 +24,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Raw NSWindow access to make the widget a PiP-style window (all Spaces +
+# floats over fullscreen apps) via setCollectionBehavior:.
+objc = "0.2"
+
