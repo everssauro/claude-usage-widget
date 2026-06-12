@@ -37,7 +37,14 @@ const STATUS_WORDS = [
   "Ruminating…",
 ];
 
-const SIZES = { compact: [280, 300], info: [280, 500], creature: [280, 300] };
+const SIZES = { compact: [280, 300], info: [280, 500], creature: [280, 300], settings: [280, 360] };
+
+// Subscription tiers: monthly price (USD) + rough 5h token ceiling (for auto-detect).
+const PLANS = {
+  pro: { label: "Pro", price: 20, ceiling: 44000 },
+  max5: { label: "Max 5×", price: 100, ceiling: 88000 },
+  max20: { label: "Max 20×", price: 200, ceiling: 220000 },
+};
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const bandFor = (pct) =>
@@ -115,7 +122,7 @@ async function notify(title, body) {
 }
 function maybeNotify(u) {
   if (u.current_pct < 70) notified80 = false; // re-arm after reset
-  if (u.current_pct >= 80 && !notified80) {
+  if (notifEnabled && u.current_pct >= 80 && !notified80) {
     notified80 = true;
     notify("Claude usage", `5h block at ${u.current_pct}% — resets in ${fmtDur(u.current_reset_min)}`);
   }
@@ -125,6 +132,7 @@ const el = {};
 function cache() {
   for (const id of [
     "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
+    "settingsBtn", "themeSeg", "planSeg", "notifToggle", "sSub", "sBlock", "sMonth", "sValue",
     "curPct", "curBar", "curReset", "wkPct", "wkBar", "wkReset",
     "statusText", "statusBar", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
   ]) {
@@ -219,6 +227,12 @@ async function setView(mode) {
 
   mode === "info" ? startCost() : stopCost();
 
+  if (mode === "settings") {
+    refreshCost(); // block API-equiv (once)
+    refreshMonth(); // month API-equiv
+    renderSettings();
+  }
+
   if (mode === "creature") {
     setCanvas(el.mascotBig);
     setAnim("idle_breathe.json");
@@ -255,6 +269,75 @@ async function applyPinned(on) {
     ? "floating popover (all desktops) — click to unpin"
     : "click to float on all desktops";
   localStorage.setItem("cuw-pinned", on ? "1" : "0");
+}
+
+// ---------------------------------------------------------------------------
+// Settings: theme, notifications, plan + cost comparison
+// ---------------------------------------------------------------------------
+let theme = "dark";
+let notifEnabled = true;
+let planManual = null; // user override ('pro'|'max5'|'max20'); null = auto
+let planAuto = null; // best-effort detected
+let lastCost = null; // last get_cost active payload
+let monthCost = null; // current month's API-equivalent $ (get_month_cost)
+
+const effectivePlan = () => planManual || planAuto || "max20";
+
+function applyTheme(t) {
+  theme = t === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("cuw-theme", theme);
+  for (const b of el.themeSeg.querySelectorAll(".seg-btn"))
+    b.classList.toggle("active", b.dataset.themeVal === theme);
+}
+
+function applyNotif(on) {
+  notifEnabled = !!on;
+  el.notifToggle.setAttribute("aria-checked", notifEnabled ? "true" : "false");
+  localStorage.setItem("cuw-notif", notifEnabled ? "1" : "0");
+}
+
+function setPlan(p) {
+  planManual = p;
+  localStorage.setItem("cuw-plan", p);
+  renderSettings();
+}
+
+// Estimate the plan: 5h ceiling ≈ block weighted tokens / utilization%. Cache
+// reads are cheap so they're excluded from the weight. Best-effort only.
+function detectPlan() {
+  if (!lastActive || lastActive.current_pct < 10 || !lastCost) return;
+  const weighted =
+    lastCost.input_tokens + lastCost.output_tokens + lastCost.cache_creation_tokens;
+  const ceiling = weighted / (lastActive.current_pct / 100);
+  planAuto = ceiling < 66000 ? "pro" : ceiling < 154000 ? "max5" : "max20";
+  if (!planManual) renderSettings();
+}
+
+function renderSettings() {
+  const plan = effectivePlan();
+  for (const b of el.planSeg.querySelectorAll(".seg-btn"))
+    b.classList.toggle("active", b.dataset.plan === plan);
+  const sub = PLANS[plan].price;
+  el.sSub.textContent = `$${sub}/mo`;
+  el.sBlock.textContent = lastCost ? `$${lastCost.cost_usd.toFixed(2)}` : "—";
+  if (monthCost != null) {
+    el.sMonth.textContent = `$${monthCost.toFixed(2)}`;
+    el.sValue.textContent = `${(monthCost / sub).toFixed(1)}× subscription`;
+  } else {
+    el.sMonth.textContent = "—";
+    el.sValue.textContent = "—";
+  }
+}
+
+async function refreshMonth() {
+  try {
+    const m = await invoke("get_month_cost");
+    monthCost = m.state === "active" ? m.cost_usd : null;
+  } catch {
+    monthCost = null;
+  }
+  renderSettings();
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +382,9 @@ function renderCost(c) {
     // Cache hit = share of input-side tokens served from cache ("MPG" of Claude Code).
     const inAll = c.input_tokens + c.cache_read_tokens + c.cache_creation_tokens;
     el.dCache.textContent = inAll > 0 ? `${Math.round((c.cache_read_tokens / inAll) * 100)}%` : "—";
+    lastCost = c;
+    detectPlan();
+    if (view === "settings") renderSettings();
   } else if (c.state === "idle") {
     dash();
     el.dModels.textContent = "no active block";
@@ -402,17 +488,32 @@ window.addEventListener("DOMContentLoaded", () => {
   setAnim("idle_breathe.json");
 
   el.mascot.addEventListener("click", () => {
-    baseBeforeCreature = view === "info" ? "info" : "compact";
+    baseBeforeCreature = view; // compact | info | settings
     setView("creature");
   });
   el.mascotBig.addEventListener("click", cycleAnim);
-  el.expandBtn.addEventListener("click", () => {
-    setView(view === "info" ? "compact" : "info");
-  });
+  el.expandBtn.addEventListener("click", () => setView(view === "info" ? "compact" : "info"));
+  el.settingsBtn.addEventListener("click", () =>
+    setView(view === "settings" ? "compact" : "settings"),
+  );
   el.creatureBack.addEventListener("click", () => setView(baseBeforeCreature));
   el.closeBtn.addEventListener("click", closeApp);
   el.pinBtn.addEventListener("click", () => applyPinned(!pinned));
+  el.themeSeg.addEventListener("click", (e) => {
+    const b = e.target.closest(".seg-btn");
+    if (b) applyTheme(b.dataset.themeVal);
+  });
+  el.planSeg.addEventListener("click", (e) => {
+    const b = e.target.closest(".seg-btn");
+    if (b) setPlan(b.dataset.plan);
+  });
+  el.notifToggle.addEventListener("click", () => applyNotif(!notifEnabled));
+
   applyPinned(localStorage.getItem("cuw-pinned") !== "0"); // default on
+  applyTheme(localStorage.getItem("cuw-theme") || "dark");
+  applyNotif(localStorage.getItem("cuw-notif") !== "0");
+  planManual = localStorage.getItem("cuw-plan"); // null → auto-detect
+  renderSettings();
 
   refresh();
   setInterval(refresh, POLL_MS);

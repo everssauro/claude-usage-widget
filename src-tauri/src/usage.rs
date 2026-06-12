@@ -312,6 +312,78 @@ pub fn parse_cost(json: &str) -> CostView {
     }
 }
 
+// ---- Monthly API-equivalent cost (subscription vs "real tokens" comparison) ----
+
+#[derive(Debug, Deserialize)]
+struct CcusageMonthly {
+    #[serde(default)]
+    monthly: Vec<MonthRow>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MonthRow {
+    #[serde(default)]
+    month: String,
+    #[serde(default)]
+    total_cost: f64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum MonthCostView {
+    Active { month: String, cost_usd: f64 },
+    Error { message: String },
+}
+
+/// Pure: ccusage monthly stdout → the current month's total. Last row = current.
+pub fn parse_month_cost(json: &str) -> MonthCostView {
+    match serde_json::from_str::<CcusageMonthly>(json) {
+        Ok(m) => match m.monthly.into_iter().last() {
+            Some(row) => MonthCostView::Active {
+                month: row.month,
+                cost_usd: row.total_cost,
+            },
+            None => MonthCostView::Active {
+                month: String::new(),
+                cost_usd: 0.0,
+            },
+        },
+        Err(e) => MonthCostView::Error {
+            message: format!("could not parse ccusage monthly: {e}"),
+        },
+    }
+}
+
+/// Tauri command: current month's API-equivalent cost (ccusage monthly). Fetched
+/// on demand (settings view), not polled.
+#[tauri::command]
+pub fn get_month_cost() -> MonthCostView {
+    let cmd_str =
+        std::env::var("CCUSAGE_CMD").unwrap_or_else(|_| "npx -y ccusage@14".to_string());
+    let mut parts = cmd_str.split_whitespace();
+    let Some(program) = parts.next() else {
+        return MonthCostView::Error {
+            message: "CCUSAGE_CMD is empty".to_string(),
+        };
+    };
+    let base_args: Vec<&str> = parts.collect();
+    let output = Command::new(resolve_program(program))
+        .args(&base_args)
+        .args(["monthly", "--json"])
+        .env("PATH", augmented_path())
+        .output();
+    match output {
+        Err(e) => MonthCostView::Error {
+            message: format!("failed to run ccusage: {e}"),
+        },
+        Ok(out) if !out.status.success() => MonthCostView::Error {
+            message: format!("ccusage exited {}", out.status),
+        },
+        Ok(out) => parse_month_cost(&String::from_utf8_lossy(&out.stdout)),
+    }
+}
+
 /// Node install dirs to prepend to PATH so a Finder-launched `.app` (which only
 /// inherits `/usr/bin:/bin:...`) can find `npx`/`node`.
 fn extra_node_dirs() -> Vec<PathBuf> {

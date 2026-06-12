@@ -142,6 +142,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             usage::get_usage,
             usage::get_cost,
+            usage::get_month_cost,
             set_pinned
         ])
         .run(tauri::generate_context!())

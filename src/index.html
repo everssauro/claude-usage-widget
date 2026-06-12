@@ -27,6 +27,7 @@
         ></canvas>
         <h1 class="title">Usage</h1>
         <span id="staleDot" class="stale-dot" title="showing last value"></span>
+        <button id="settingsBtn" class="hbtn" title="settings">⚙</button>
         <button id="pinBtn" class="hbtn pin" title="pin on top">
           <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
             <rect x="7" y="3" width="10" height="2.4" rx="1.2" fill="currentColor" />
@@ -71,6 +72,35 @@
       <footer class="status" id="statusBar">
         <span class="star">✻</span> <span id="statusText">Divining…</span>
       </footer>
+
+      <!-- Settings panel -->
+      <section class="settings">
+        <div class="set-row">
+          <span class="set-label">Theme</span>
+          <div class="seg" id="themeSeg">
+            <button class="seg-btn" data-theme-val="dark">Dark</button>
+            <button class="seg-btn" data-theme-val="light">Light</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <span class="set-label">Notifications</span>
+          <button id="notifToggle" class="switch" role="switch" aria-checked="true"></button>
+        </div>
+        <div class="set-row">
+          <span class="set-label">Plan</span>
+          <div class="seg" id="planSeg">
+            <button class="seg-btn" data-plan="pro">Pro</button>
+            <button class="seg-btn" data-plan="max5">Max&nbsp;5×</button>
+            <button class="seg-btn" data-plan="max20">Max&nbsp;20×</button>
+          </div>
+        </div>
+        <div class="set-cost">
+          <div class="drow"><span class="dl">Subscription</span><span id="sSub" class="dv">—</span></div>
+          <div class="drow"><span class="dl">API-equiv · block</span><span id="sBlock" class="dv">—</span></div>
+          <div class="drow"><span class="dl">API-equiv · month</span><span id="sMonth" class="dv">—</span></div>
+          <div class="drow"><span class="dl">Value</span><span id="sValue" class="dv">—</span></div>
+        </div>
+      </section>
 
       <!-- Creature mode: big idle Clawd; click changes figure -->
       <div class="creature">

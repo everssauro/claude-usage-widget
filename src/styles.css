@@ -268,11 +268,116 @@ body {
 .card[data-view="creature"] .head,
 .card[data-view="creature"] .meters,
 .card[data-view="creature"] .detail,
-.card[data-view="creature"] .status {
+.card[data-view="creature"] .status,
+.card[data-view="creature"] .settings {
   display: none;
 }
 .card[data-view="creature"] .creature {
   display: flex;
+}
+
+/* ---- settings panel ---- */
+.settings {
+  display: none;
+  flex-direction: column;
+  gap: 11px;
+  padding: 4px 2px;
+  flex: 1;
+}
+.card[data-view="settings"] .meters,
+.card[data-view="settings"] .detail,
+.card[data-view="settings"] .status,
+.card[data-view="settings"] .creature {
+  display: none;
+}
+.card[data-view="settings"] .settings {
+  display: flex;
+}
+.set-row {
+  display: flex;
+  align-items: center;
+}
+.set-label {
+  font-size: 13px;
+  color: var(--fg);
+}
+.seg {
+  margin-left: auto;
+  display: flex;
+  background: var(--track);
+  border-radius: 8px;
+  padding: 2px;
+}
+.seg-btn {
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 11.5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.seg-btn.active {
+  background: var(--panel);
+  color: var(--fg);
+}
+.switch {
+  margin-left: auto;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--track);
+  border: none;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--fg);
+  transition: transform 0.2s;
+}
+.switch[aria-checked="true"] {
+  background: var(--accent);
+}
+.switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+.set-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ---- light theme (Claude palette) ---- */
+:root[data-theme="light"] {
+  --bg: #f4f2ec;
+  --panel: #ffffff;
+  --fg: #29281f;
+  --dim: #76746a;
+  --pill-bg: #ebe8df;
+  --track: #e4e1d6;
+  --accent: #bf5d3a;
+}
+:root[data-theme="light"] .card {
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 10px 30px rgba(60, 50, 30, 0.18);
+}
+:root[data-theme="light"] .set-cost {
+  border-top-color: rgba(0, 0, 0, 0.1);
+}
+:root[data-theme="light"] .switch[aria-checked="true"]::after {
+  background: #fff;
 }
 
 /* ---- data-state overlays (z2 over content; header z3 stays clickable) ---- */
