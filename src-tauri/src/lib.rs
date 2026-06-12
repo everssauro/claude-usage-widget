@@ -105,6 +105,7 @@ fn set_pinned(window: tauri::WebviewWindow, on: bool) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();

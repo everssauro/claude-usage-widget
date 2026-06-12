@@ -91,6 +91,17 @@ body {
 .card[data-stale="true"] .stale-dot {
   opacity: 1;
 }
+/* stale = dim the whole card, not just the dot */
+.card[data-stale="true"] {
+  opacity: 0.74;
+}
+/* throttle / risk states (driven by the rate-limit status + ETA) */
+.card[data-status="warning"] {
+  border-color: rgba(224, 161, 58, 0.55);
+}
+.card[data-status="rejected"] {
+  border-color: rgba(224, 114, 106, 0.7);
+}
 .hbtn {
   background: none;
   border: none;
@@ -216,6 +227,12 @@ body {
 .status .star {
   font-size: 11px;
   vertical-align: 1px;
+}
+.card[data-status="warning"] .status {
+  color: #e0a13a;
+}
+.card[data-status="rejected"] .status {
+  color: #e0726a;
 }
 
 /* ---- creature mode ---- */

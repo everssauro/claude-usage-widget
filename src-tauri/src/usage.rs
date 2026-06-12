@@ -276,7 +276,8 @@ pub struct Cost {
     pub total_tokens: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cache_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
 }
 
 /// Pure: ccusage stdout → cost view model. Unit-tested against the fixture.
@@ -303,7 +304,8 @@ pub fn parse_cost(json: &str) -> CostView {
                 total_tokens: b.total_tokens,
                 input_tokens: tc.input_tokens,
                 output_tokens: tc.output_tokens,
-                cache_tokens: tc.cache_read_input_tokens + tc.cache_creation_input_tokens,
+                cache_read_tokens: tc.cache_read_input_tokens,
+                cache_creation_tokens: tc.cache_creation_input_tokens,
             })
         }
     }
@@ -480,7 +482,8 @@ mod tests {
                 assert_eq!(c.total_tokens, 156485656);
                 assert_eq!(c.input_tokens, 199873);
                 assert_eq!(c.output_tokens, 694386);
-                assert_eq!(c.cache_tokens, 3849082 + 151742315);
+                assert_eq!(c.cache_read_tokens, 151742315);
+                assert_eq!(c.cache_creation_tokens, 3849082);
             }
             other => panic!("expected Active, got {other:?}"),
         }

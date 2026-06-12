@@ -37,7 +37,7 @@ const STATUS_WORDS = [
   "Ruminating…",
 ];
 
-const SIZES = { compact: [280, 300], info: [280, 470], creature: [280, 300] };
+const SIZES = { compact: [280, 300], info: [280, 500], creature: [280, 300] };
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const bandFor = (pct) =>
@@ -66,12 +66,67 @@ function shortModels(models) {
   return [...s].join(" · ") || "—";
 }
 
+const fmtDur = (min) => {
+  if (min <= 0) return "0m";
+  const h = Math.floor(min / 60), m = min % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+};
+const fmtClock = (min) =>
+  new Date(Date.now() + min * 60000).toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+
+// Estimate when the 5h utilization hits 100% from its recent slope. Returns
+// minutes-to-limit, or null if not climbing / not enough samples yet.
+let pctSamples = [];
+function estimateEtaMin(currentPct) {
+  const now = Date.now();
+  const last = pctSamples[pctSamples.length - 1];
+  if (last && currentPct < last.pct - 3) pctSamples = []; // block reset → restart
+  pctSamples.push({ t: now, pct: currentPct });
+  pctSamples = pctSamples.filter((s) => now - s.t <= 10 * 60000);
+  if (pctSamples.length < 2) return null;
+  const a = pctSamples[0], b = pctSamples[pctSamples.length - 1];
+  const dtMin = (b.t - a.t) / 60000;
+  if (dtMin < 0.8) return null;
+  const rate = (b.pct - a.pct) / dtMin; // % per minute
+  if (rate <= 0.05) return null;
+  return Math.max(0, Math.round((100 - currentPct) / rate));
+}
+
+// "rejected" (over/throttled) | "risk" (will hit before reset) | "warning" | "ok"
+function riskState(u, etaMin) {
+  if (u.current_pct >= 100 || u.status === "rejected") return "rejected";
+  if (etaMin != null && etaMin < u.current_reset_min) return "risk";
+  if (u.status === "allowed_warning" || u.current_pct >= 80) return "warning";
+  return "ok";
+}
+
+let notified80 = false;
+async function notify(title, body) {
+  try {
+    const N = window.__TAURI__.notification;
+    let granted = await N.isPermissionGranted();
+    if (!granted) granted = (await N.requestPermission()) === "granted";
+    if (granted) await N.sendNotification({ title, body });
+  } catch {
+    /* headless / denied */
+  }
+}
+function maybeNotify(u) {
+  if (u.current_pct < 70) notified80 = false; // re-arm after reset
+  if (u.current_pct >= 80 && !notified80) {
+    notified80 = true;
+    notify("Claude usage", `5h block at ${u.current_pct}% — resets in ${fmtDur(u.current_reset_min)}`);
+  }
+}
+
 const el = {};
 function cache() {
   for (const id of [
     "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
     "curPct", "curBar", "curReset", "wkPct", "wkBar", "wkReset",
-    "statusText", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens",
+    "statusText", "statusBar", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -227,7 +282,8 @@ async function refreshCost() {
 }
 function renderCost(c) {
   const dash = () => {
-    el.dCost.textContent = el.dBurn.textContent = el.dProj.textContent = el.dTokens.textContent = "—";
+    el.dCost.textContent = el.dBurn.textContent = el.dProj.textContent =
+      el.dTokens.textContent = el.dCache.textContent = "—";
   };
   if (c.state === "active") {
     el.dCost.textContent = `$${c.cost_usd.toFixed(2)}`;
@@ -235,6 +291,9 @@ function renderCost(c) {
     el.dProj.textContent = `$${c.projected_cost.toFixed(2)}`;
     el.dModels.textContent = shortModels(c.models);
     el.dTokens.textContent = fmtBig(c.total_tokens);
+    // Cache hit = share of input-side tokens served from cache ("MPG" of Claude Code).
+    const inAll = c.input_tokens + c.cache_read_tokens + c.cache_creation_tokens;
+    el.dCache.textContent = inAll > 0 ? `${Math.round((c.cache_read_tokens / inAll) * 100)}%` : "—";
   } else if (c.state === "idle") {
     dash();
     el.dModels.textContent = "no active block";
@@ -253,19 +312,36 @@ let lastActive = null;
 
 const setStale = (on) => (el.card.dataset.stale = on ? "true" : "false");
 
+let lastEtaMin = null;
+let lastRisk = "ok";
+
 function renderActive(u) {
   el.curPct.textContent = `${u.current_pct}%`;
   el.curBar.style.width = `${clamp(u.current_pct, 0, 100)}%`;
   el.curBar.style.background = heat(u.current_pct);
-  el.curReset.textContent = fmtReset(u.current_reset_min);
+  // 5h reset shows the clock time too ("plan a break around it"); weekly stays a countdown.
+  el.curReset.textContent =
+    u.current_reset_min > 0
+      ? `${fmtReset(u.current_reset_min)} (${fmtClock(u.current_reset_min)})`
+      : fmtReset(u.current_reset_min);
 
   el.wkPct.textContent = `${u.weekly_pct}%`;
   el.wkBar.style.width = `${clamp(u.weekly_pct, 0, 100)}%`;
   el.wkBar.style.background = heat(u.weekly_pct);
   el.wkReset.textContent = fmtReset(u.weekly_reset_min);
 
+  // ETA-to-limit + throttle status drives the footer + card color (computed on
+  // fresh data in render(); see lastRisk/lastEtaMin).
+  el.card.dataset.status =
+    lastRisk === "rejected" ? "rejected" : lastRisk === "ok" ? "ok" : "warning";
   el.statusText.textContent =
-    u.current_pct >= 100 ? "Tapped out…" : STATUS_WORDS[statusIdx % STATUS_WORDS.length];
+    lastRisk === "rejected"
+      ? "limit reached"
+      : lastRisk === "risk"
+        ? `limit in ${fmtDur(lastEtaMin)}`
+        : lastRisk === "warning"
+          ? "approaching limit"
+          : STATUS_WORDS[statusIdx % STATUS_WORDS.length];
 
   if (view !== "creature") {
     const b = bandFor(u.current_pct);
@@ -291,6 +367,10 @@ function render(data) {
   if (data.state === "active") {
     lastActive = data;
     statusIdx++;
+    // Sample utilization + evaluate risk only on FRESH data (not stale re-renders).
+    lastEtaMin = estimateEtaMin(data.current_pct);
+    lastRisk = riskState(data, lastEtaMin);
+    maybeNotify(data);
     renderActive(data);
     setStale(false);
   } else {
