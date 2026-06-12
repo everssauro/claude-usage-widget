@@ -87,7 +87,6 @@ fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
         let ns_window = ptr as *mut Object;
         const FULLSCREEN_AUXILIARY: u64 = 1 << 8;
         const STATIONARY: u64 = 1 << 4;
-        const NONACTIVATING_PANEL: u64 = 1 << 7; // NSWindowStyleMaskNonactivatingPanel
         // Above fullscreen content. Screen-saver level is the level real overlay
         // apps use to sit over other apps' fullscreen Spaces.
         const NS_SCREEN_SAVER_WINDOW_LEVEL: i64 = 1000;
@@ -100,13 +99,6 @@ fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
             let level: i64 = if on { NS_SCREEN_SAVER_WINDOW_LEVEL } else { 0 };
             let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
             let _: () = msg_send![ns_window, setLevel: level];
-            // Make it a NON-ACTIVATING PANEL so it can float over OTHER apps'
-            // fullscreen Spaces — regular windows are blocked from those. This is
-            // the key trick overlay apps use.
-            if on {
-                let mask: u64 = msg_send![ns_window, styleMask];
-                let _: () = msg_send![ns_window, setStyleMask: mask | NONACTIVATING_PANEL];
-            }
         }
     }
 }
@@ -130,6 +122,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_nspanel::init())
         .manage(Pinned(Mutex::new(true)))
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -145,6 +138,16 @@ pub fn run() {
                     }
                 }
                 let _ = window.set_focus();
+                // Convert to a non-activating NSPanel ONCE so it can overlay other
+                // apps' fullscreen Spaces. Level + collectionBehavior stay in apply_pip.
+                #[cfg(target_os = "macos")]
+                {
+                    use tauri_nspanel::WebviewWindowExt;
+                    if let Ok(panel) = window.to_panel() {
+                        const NONACTIVATING_PANEL: i32 = 1 << 7;
+                        panel.set_style_mask(NONACTIVATING_PANEL);
+                    }
+                }
                 apply_pip(&window, true); // PiP on by default; JS reconciles via localStorage
             }
             Ok(())

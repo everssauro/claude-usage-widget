@@ -21,6 +21,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+# Converts the window to a real NSPanel so a non-activating overlay can float
+# over OTHER apps' fullscreen Spaces (regular windows are blocked from those).
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
