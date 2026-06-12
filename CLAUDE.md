@@ -14,7 +14,9 @@ Features: Current (5h) + Weekly (7d) usage % with heat bars + reset timers (5h a
 ## Build / run
 - Prereqs: **Rust** (rustup, `cargo 1.96`; non-login shells: `source "$HOME/.cargo/env"`), Xcode CLT, Node v22, ccusage reachable via `npx`.
 - Dev: `npm run tauri dev` · Build: `npm run tauri build` (→ `.app`/`.dmg` in `src-tauri/target/release/bundle/`).
-- Test: `cargo test --manifest-path src-tauri/Cargo.toml` — 10 unit tests (rate-limit parser, token extraction, ccusage cost parser) are the gate.
+- Test: `cargo test --manifest-path src-tauri/Cargo.toml` — 12 unit tests (rate-limit parser, token extraction, ccusage cost/month parsers) are the gate.
+- **CI installers**: `.github/workflows/build.yml` (manual `gh workflow run build` or `v*` tag) builds macOS `.dmg` + Linux `.deb`/`.AppImage`/`.rpm` as private artifacts. Linux: macOS-only deps (`objc`, `tauri-nspanel`) are target-gated in Cargo.toml; token read falls back to `~/.claude/.credentials.json`; PiP degrades to always-on-top + all-workspaces.
+- Perf notes: Tauri commands are async (`spawn_blocking`) — blocking I/O on the main thread froze the UI every poll; ccusage cmd/token/HTTP-agent are cached (`OnceLock`); position saves throttled (1/s + flush on close); animations pre-rendered offscreen + JSON cached; polling decays 30s→2min when utilization is flat.
 - Icon: render a Clawd frame to a 1024 PNG (PIL, see git history) → `npm run tauri icon <png>`.
 - `CCUSAGE_CMD` / `CLAUDE_CODE_TOKEN` env overrides (the latter handy for headless testing without the Keychain).
 
