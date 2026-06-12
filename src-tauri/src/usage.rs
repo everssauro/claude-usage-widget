@@ -174,6 +174,7 @@ pub fn get_usage() -> UsageView {
     });
 
     let result = ureq::post(API_URL)
+        .timeout(std::time::Duration::from_secs(10)) // don't hang the poll on a slow network
         .set("anthropic-version", "2023-06-01")
         .set("anthropic-beta", "oauth-2025-04-20")
         .set("content-type", "application/json")

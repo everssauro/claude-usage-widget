@@ -273,11 +273,16 @@ function stopCost() {
     costTimer = null;
   }
 }
+let costInFlight = false;
 async function refreshCost() {
+  if (costInFlight) return; // don't stack ccusage spawns if one is slow
+  costInFlight = true;
   try {
     renderCost(await invoke("get_cost"));
   } catch (e) {
     renderCost({ state: "error", message: String(e) });
+  } finally {
+    costInFlight = false;
   }
 }
 function renderCost(c) {
@@ -378,11 +383,16 @@ function render(data) {
   }
 }
 
+let usageInFlight = false;
 async function refresh() {
+  if (usageInFlight) return; // don't stack API calls if one is slow
+  usageInFlight = true;
   try {
     render(await invoke("get_usage"));
   } catch (e) {
     showDegraded(String(e));
+  } finally {
+    usageInFlight = false;
   }
 }
 

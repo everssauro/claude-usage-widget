@@ -68,25 +68,32 @@ fn save_position(app: &AppHandle, pos: LogicalPosition<f64>) {
 #[cfg(target_os = "macos")]
 fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
     use objc::{msg_send, runtime::Object, sel, sel_impl};
+    // IMPORTANT ORDER: set_always_on_top resets collectionBehavior, so do it
+    // FIRST (toggle to force the OS call), then set our collectionBehavior +
+    // level LAST so they stick. This was the bug — behavior was being clobbered.
+    let _ = window.set_always_on_top(!on);
+    let _ = window.set_always_on_top(on);
+
     if let Ok(ptr) = window.ns_window() {
         let ns_window = ptr as *mut Object;
         const CAN_JOIN_ALL_SPACES: u64 = 1 << 0;
         const FULLSCREEN_AUXILIARY: u64 = 1 << 8;
-        // collectionBehavior controls Spaces + fullscreen participation.
+        // Pinned: follow ALL Spaces + float OVER fullscreen apps. Unpinned: stay on
+        // the current Space but keep FullScreenAuxiliary so it can still be dragged
+        // onto / overlay a fullscreen Space (like a Meet window).
         let behavior: u64 = if on {
             CAN_JOIN_ALL_SPACES | FULLSCREEN_AUXILIARY
         } else {
-            0
+            FULLSCREEN_AUXILIARY
         };
+        // Level above normal windows so it floats over fullscreen content when pinned.
+        const NS_POPUP_MENU_WINDOW_LEVEL: i64 = 101;
+        let level: i64 = if on { NS_POPUP_MENU_WINDOW_LEVEL } else { 0 };
         unsafe {
             let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+            let _: () = msg_send![ns_window, setLevel: level];
         }
     }
-    // Re-assert the window level via Tauri. Changing collectionBehavior resets
-    // the level, and set_always_on_top is a no-op when the state is unchanged —
-    // so toggle to the opposite first to force the OS call to re-apply.
-    let _ = window.set_always_on_top(!on);
-    let _ = window.set_always_on_top(on);
 }
 
 #[cfg(not(target_os = "macos"))]
