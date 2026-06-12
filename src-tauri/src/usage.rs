@@ -1,20 +1,26 @@
-//! Live Claude Code usage via the unified rate-limit headers.
+//! Live Claude Code usage via the unified rate-limit headers + cost via ccusage.
 //!
 //! Mirrors the Clawdmeter daemon: read the Claude Code OAuth token (macOS
 //! Keychain, or `~/.claude/.credentials.json`), make one minimal `/v1/messages`
 //! call, and read the `anthropic-ratelimit-unified-*` response headers — the
 //! same 5h (Current) + 7d (Weekly) utilization the subscription enforces. This
-//! is subscription auth (not API-billed). The header parsing is split into a
-//! pure, unit-tested function; the network/keychain I/O is not.
+//! is subscription auth (not API-billed). All parsers are pure, unit-tested
+//! functions; the network/keychain/subprocess I/O is not.
+//!
+//! Commands are `async` + `spawn_blocking` so the blocking I/O (HTTPS round-trip,
+//! `security`/`npx` subprocesses) never runs on the macOS main thread — running
+//! them there froze the window during every poll.
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+const TOKEN_TTL: Duration = Duration::from_secs(300);
 
 // ---------------------------------------------------------------------------
 // View model handed to the frontend. Internally tagged → `{ "state": "...", ... }`.
@@ -76,7 +82,7 @@ where
 }
 
 /// Pull the `accessToken` out of a Claude Code credentials blob — direct,
-/// nested under any key, regex fallback, or a bare token.
+/// nested under any key, or a bare token.
 fn extract_access_token(blob: &str) -> Option<String> {
     let blob = blob.trim();
     if blob.is_empty() {
@@ -94,19 +100,7 @@ fn extract_access_token(blob: &str) -> Option<String> {
             }
         }
     }
-    // Regex-free fallback: find "accessToken":"..." by hand.
-    if let Some(idx) = blob.find("\"accessToken\"") {
-        let rest = &blob[idx + "\"accessToken\"".len()..];
-        if let Some(colon) = rest.find(':') {
-            let after = rest[colon + 1..].trim_start();
-            if let Some(stripped) = after.strip_prefix('"') {
-                if let Some(end) = stripped.find('"') {
-                    return Some(stripped[..end].to_string());
-                }
-            }
-        }
-    }
-    // Bare token.
+    // Bare token (no JSON wrapper).
     if blob.len() >= 20
         && blob
             .chars()
@@ -117,14 +111,7 @@ fn extract_access_token(blob: &str) -> Option<String> {
     None
 }
 
-/// Read the Claude Code OAuth token. `CLAUDE_CODE_TOKEN` env wins (handy for
-/// headless testing), then macOS Keychain, then `~/.claude/.credentials.json`.
-fn read_token() -> Option<String> {
-    if let Ok(t) = std::env::var("CLAUDE_CODE_TOKEN") {
-        if !t.trim().is_empty() {
-            return Some(t.trim().to_string());
-        }
-    }
+fn read_token_uncached() -> Option<String> {
     if cfg!(target_os = "macos") {
         let user = std::env::var("USER").ok()?;
         let out = Command::new("security")
@@ -150,6 +137,36 @@ fn read_token() -> Option<String> {
     extract_access_token(&raw)
 }
 
+/// Read the Claude Code OAuth token. `CLAUDE_CODE_TOKEN` env wins (handy for
+/// headless testing), then macOS Keychain, then `~/.claude/.credentials.json`.
+/// Keychain/file reads are cached for [`TOKEN_TTL`] so we don't fork `security`
+/// on every poll; cache is invalidated on HTTP 401/403.
+fn token_cache() -> &'static Mutex<Option<(String, Instant)>> {
+    static CACHE: OnceLock<Mutex<Option<(String, Instant)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn read_token() -> Option<String> {
+    if let Ok(t) = std::env::var("CLAUDE_CODE_TOKEN") {
+        if !t.trim().is_empty() {
+            return Some(t.trim().to_string());
+        }
+    }
+    let mut cache = token_cache().lock().unwrap();
+    if let Some((token, at)) = cache.as_ref() {
+        if at.elapsed() < TOKEN_TTL {
+            return Some(token.clone());
+        }
+    }
+    let token = read_token_uncached()?;
+    *cache = Some((token.clone(), Instant::now()));
+    Some(token)
+}
+
+fn invalidate_token_cache() {
+    token_cache().lock().unwrap().take();
+}
+
 fn now_unix() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -157,10 +174,18 @@ fn now_unix() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Tauri command: read the token, make one minimal call, parse the rate-limit
-/// headers. Returns `Active` with the four numbers, or `Error` with a message.
-#[tauri::command]
-pub fn get_usage() -> UsageView {
+/// One shared HTTP agent → connection keep-alive between polls (instead of a
+/// fresh DNS+TCP+TLS handshake every 30s).
+fn http_agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(10)) // don't hang the poll on a slow network
+            .build()
+    })
+}
+
+fn fetch_usage() -> UsageView {
     let Some(token) = read_token() else {
         return UsageView::Error {
             message: "No Claude Code token (sign in to Claude Code first)".to_string(),
@@ -173,8 +198,8 @@ pub fn get_usage() -> UsageView {
         "messages": [{ "role": "user", "content": "hi" }],
     });
 
-    let result = ureq::post(API_URL)
-        .timeout(std::time::Duration::from_secs(10)) // don't hang the poll on a slow network
+    let result = http_agent()
+        .post(API_URL)
         .set("anthropic-version", "2023-06-01")
         .set("anthropic-beta", "oauth-2025-04-20")
         .set("content-type", "application/json")
@@ -186,7 +211,12 @@ pub fn get_usage() -> UsageView {
         Ok(r) => r,
         // Rate-limit headers are present even on 4xx (e.g. 429) — use them if so.
         Err(ureq::Error::Status(code, r)) => {
-            if r.header("anthropic-ratelimit-unified-5h-utilization").is_some() {
+            if matches!(code, 401 | 403) {
+                invalidate_token_cache(); // token refreshed/revoked — re-read next poll
+            }
+            if r.header("anthropic-ratelimit-unified-5h-utilization")
+                .is_some()
+            {
                 r
             } else {
                 return UsageView::Error {
@@ -205,9 +235,20 @@ pub fn get_usage() -> UsageView {
     UsageView::Active(usage)
 }
 
+/// Tauri command: read the token, make one minimal call, parse the rate-limit
+/// headers. Async + spawn_blocking → off the main thread.
+#[tauri::command]
+pub async fn get_usage() -> UsageView {
+    tauri::async_runtime::spawn_blocking(fetch_usage)
+        .await
+        .unwrap_or_else(|e| UsageView::Error {
+            message: format!("worker failed: {e}"),
+        })
+}
+
 // ===========================================================================
 // Cost / burn / projection — from `ccusage` (the expanded info panel).
-// Re-added from the first version; the rate-limit headers don't carry $.
+// The rate-limit headers don't carry $.
 // ===========================================================================
 
 #[derive(Debug, Deserialize)]
@@ -355,34 +396,9 @@ pub fn parse_month_cost(json: &str) -> MonthCostView {
     }
 }
 
-/// Tauri command: current month's API-equivalent cost (ccusage monthly). Fetched
-/// on demand (settings view), not polled.
-#[tauri::command]
-pub fn get_month_cost() -> MonthCostView {
-    let cmd_str =
-        std::env::var("CCUSAGE_CMD").unwrap_or_else(|_| "npx -y ccusage@14".to_string());
-    let mut parts = cmd_str.split_whitespace();
-    let Some(program) = parts.next() else {
-        return MonthCostView::Error {
-            message: "CCUSAGE_CMD is empty".to_string(),
-        };
-    };
-    let base_args: Vec<&str> = parts.collect();
-    let output = Command::new(resolve_program(program))
-        .args(&base_args)
-        .args(["monthly", "--json"])
-        .env("PATH", augmented_path())
-        .output();
-    match output {
-        Err(e) => MonthCostView::Error {
-            message: format!("failed to run ccusage: {e}"),
-        },
-        Ok(out) if !out.status.success() => MonthCostView::Error {
-            message: format!("ccusage exited {}", out.status),
-        },
-        Ok(out) => parse_month_cost(&String::from_utf8_lossy(&out.stdout)),
-    }
-}
+// ---------------------------------------------------------------------------
+// ccusage runner — shared by get_cost / get_month_cost.
+// ---------------------------------------------------------------------------
 
 /// Node install dirs to prepend to PATH so a Finder-launched `.app` (which only
 /// inherits `/usr/bin:/bin:...`) can find `npx`/`node`.
@@ -402,27 +418,14 @@ fn extra_node_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn augmented_path() -> String {
-    let mut parts: Vec<String> = extra_node_dirs()
-        .iter()
-        .map(|d| d.to_string_lossy().into_owned())
-        .collect();
-    if let Ok(current) = std::env::var("PATH") {
-        if !current.is_empty() {
-            parts.push(current);
-        }
-    }
-    parts.join(":")
-}
-
 /// Resolve a bare program name (`npx`) to an absolute path — the program is
 /// looked up via the *parent* PATH at spawn, so augmenting only the child PATH
 /// wouldn't find it. Searches node dirs first, then PATH.
-fn resolve_program(program: &str) -> String {
+fn resolve_program(program: &str, node_dirs: &[PathBuf]) -> String {
     if program.contains('/') {
         return program.to_string();
     }
-    let mut search = extra_node_dirs();
+    let mut search: Vec<PathBuf> = node_dirs.to_vec();
     if let Ok(path) = std::env::var("PATH") {
         search.extend(std::env::split_paths(&path));
     }
@@ -435,42 +438,94 @@ fn resolve_program(program: &str) -> String {
     program.to_string()
 }
 
-/// Tauri command: run ccusage, parse cost/burn/projection. Called only while the
-/// info panel is open. `CCUSAGE_CMD` overrides the default `npx -y ccusage@latest`.
-#[tauri::command]
-pub fn get_cost() -> CostView {
-    let cmd_str =
+struct CcusageCmd {
+    program: String,
+    base_args: Vec<String>,
+    path: String,
+}
+
+/// Parse CCUSAGE_CMD + resolve program + build PATH **once** — node installs
+/// don't move mid-session, and the resolution walks the filesystem.
+fn ccusage_cmd() -> &'static Result<CcusageCmd, String> {
+    static CMD: OnceLock<Result<CcusageCmd, String>> = OnceLock::new();
+    CMD.get_or_init(|| {
         // Pinned to @14: v15+ ships a native (Bun-compiled) binary that, on some
         // Macs, hardcodes a nonexistent nix libiconv path and crashes (dyld). v14
         // is the last pure-JS release and runs fine via node. Override with CCUSAGE_CMD.
-        std::env::var("CCUSAGE_CMD").unwrap_or_else(|_| "npx -y ccusage@14".to_string());
-    let mut parts = cmd_str.split_whitespace();
-    let Some(program) = parts.next() else {
-        return CostView::Error {
-            message: "CCUSAGE_CMD is empty".to_string(),
+        let cmd_str =
+            std::env::var("CCUSAGE_CMD").unwrap_or_else(|_| "npx -y ccusage@14".to_string());
+        let mut parts = cmd_str.split_whitespace();
+        let Some(program) = parts.next() else {
+            return Err("CCUSAGE_CMD is empty".to_string());
         };
+        let node_dirs = extra_node_dirs();
+        let mut path_parts: Vec<String> = node_dirs
+            .iter()
+            .map(|d| d.to_string_lossy().into_owned())
+            .collect();
+        if let Ok(current) = std::env::var("PATH") {
+            if !current.is_empty() {
+                path_parts.push(current);
+            }
+        }
+        Ok(CcusageCmd {
+            program: resolve_program(program, &node_dirs),
+            base_args: parts.map(str::to_string).collect(),
+            path: path_parts.join(":"),
+        })
+    })
+}
+
+/// Run `ccusage <subcommand args>` and return its stdout (or an error message).
+fn run_ccusage(args: &[&str]) -> Result<String, String> {
+    let cmd = match ccusage_cmd() {
+        Ok(c) => c,
+        Err(e) => return Err(e.clone()),
     };
-    let base_args: Vec<&str> = parts.collect();
-
-    let output = Command::new(resolve_program(program))
-        .args(&base_args)
-        .args(["blocks", "--active", "--json"])
-        .env("PATH", augmented_path())
+    let output = Command::new(&cmd.program)
+        .args(&cmd.base_args)
+        .args(args)
+        .env("PATH", &cmd.path)
         .output();
-
     match output {
-        Err(e) => CostView::Error {
-            message: format!("failed to run ccusage: {e}"),
-        },
-        Ok(out) if !out.status.success() => CostView::Error {
-            message: format!(
-                "ccusage exited {}: {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-        },
-        Ok(out) => parse_cost(&String::from_utf8_lossy(&out.stdout)),
+        Err(e) => Err(format!("failed to run ccusage: {e}")),
+        Ok(out) if !out.status.success() => Err(format!(
+            "ccusage exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Ok(out) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
     }
+}
+
+/// Tauri command: active-block cost/burn/projection. Polled only while the info
+/// panel is open. Async + spawn_blocking → off the main thread.
+#[tauri::command]
+pub async fn get_cost() -> CostView {
+    tauri::async_runtime::spawn_blocking(|| {
+        run_ccusage(&["blocks", "--active", "--json"])
+            .map_or_else(|message| CostView::Error { message }, |o| parse_cost(&o))
+    })
+    .await
+    .unwrap_or_else(|e| CostView::Error {
+        message: format!("worker failed: {e}"),
+    })
+}
+
+/// Tauri command: current month's API-equivalent cost. Fetched on demand
+/// (settings view), not polled.
+#[tauri::command]
+pub async fn get_month_cost() -> MonthCostView {
+    tauri::async_runtime::spawn_blocking(|| {
+        run_ccusage(&["monthly", "--json"]).map_or_else(
+            |message| MonthCostView::Error { message },
+            |o| parse_month_cost(&o),
+        )
+    })
+    .await
+    .unwrap_or_else(|e| MonthCostView::Error {
+        message: format!("worker failed: {e}"),
+    })
 }
 
 #[cfg(test)]

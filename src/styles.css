@@ -21,7 +21,7 @@
   --pill-bg: #26272b;
   --track: #2a2b2e;
   --accent: #d2693f; /* Clawd orange — status, star, close */
-  --heat: hsl(78 45% 48%);
+  --heat: hsl(90 55% 48%); /* pre-first-render placeholder; JS heat() takes over */
 
   font-family: "StyreneB", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -265,11 +265,10 @@ body {
   font-size: 16px;
   opacity: 0.55;
 }
+/* .detail/.settings are already hidden unless their own view matches */
 .card[data-view="creature"] .head,
 .card[data-view="creature"] .meters,
-.card[data-view="creature"] .detail,
-.card[data-view="creature"] .status,
-.card[data-view="creature"] .settings {
+.card[data-view="creature"] .status {
   display: none;
 }
 .card[data-view="creature"] .creature {
@@ -285,9 +284,7 @@ body {
   flex: 1;
 }
 .card[data-view="settings"] .meters,
-.card[data-view="settings"] .detail,
-.card[data-view="settings"] .status,
-.card[data-view="settings"] .creature {
+.card[data-view="settings"] .status {
   display: none;
 }
 .card[data-view="settings"] .settings {
@@ -375,9 +372,6 @@ body {
 }
 :root[data-theme="light"] .set-cost {
   border-top-color: rgba(0, 0, 0, 0.1);
-}
-:root[data-theme="light"] .switch[aria-checked="true"]::after {
-  background: #fff;
 }
 
 /* ---- data-state overlays (z2 over content; header z3 stays clickable) ---- */

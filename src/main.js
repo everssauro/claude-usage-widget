@@ -1,6 +1,11 @@
 const { invoke } = window.__TAURI__.core;
 
+// Poll cadence: 30s while utilization is moving; decay to 2min once several
+// consecutive samples are identical (each poll costs a sliver of the very
+// quota it measures), snap back on change.
 const POLL_MS = 30_000;
+const POLL_SLOW_MS = 120_000;
+const FLAT_SAMPLES_TO_SLOW = 5;
 
 const ANIMS = [
   "idle_breathe",
@@ -18,6 +23,7 @@ const ANIMS = [
   "dance_djmix",
 ].map((n) => `${n}.json`);
 
+// Usage band → animation (busier as usage climbs).
 const BAND_ANIM = [
   "idle_breathe",
   "work_think",
@@ -39,11 +45,13 @@ const STATUS_WORDS = [
 
 const SIZES = { compact: [280, 300], info: [280, 500], creature: [280, 300], settings: [280, 360] };
 
-// Subscription tiers: monthly price (USD) + rough 5h token ceiling (for auto-detect).
+// Subscription tiers (USD/month). Plan is user-selected in settings — the
+// rate-limit % doesn't map to token counts in any documented way, so
+// auto-detection was unreliable and removed.
 const PLANS = {
-  pro: { label: "Pro", price: 20, ceiling: 44000 },
-  max5: { label: "Max 5×", price: 100, ceiling: 88000 },
-  max20: { label: "Max 20×", price: 200, ceiling: 220000 },
+  pro: { label: "Pro", price: 20 },
+  max5: { label: "Max 5×", price: 100 },
+  max20: { label: "Max 20×", price: 200 },
 };
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
@@ -52,15 +60,20 @@ const bandFor = (pct) =>
 
 const heat = (pct) => `hsl(${90 - (clamp(pct, 0, 100) / 100) * 90} 55% 48%)`;
 
-function fmtReset(min) {
-  if (min <= 0) return "Resetting…";
+const fmtDur = (min) => {
+  if (min <= 0) return "0m";
   const d = Math.floor(min / 1440);
   const h = Math.floor((min % 1440) / 60);
   const m = min % 60;
-  if (d > 0) return `Resets in ${d}d ${h}h`;
-  if (h > 0) return `Resets in ${h}h ${m}m`;
-  return `Resets in ${m}m`;
-}
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+};
+const fmtReset = (min) => (min <= 0 ? "Resetting…" : `Resets in ${fmtDur(min)}`);
+const fmtClock = (min) =>
+  new Date(Date.now() + min * 60000).toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
 
 function fmtBig(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
@@ -73,63 +86,11 @@ function shortModels(models) {
   return [...s].join(" · ") || "—";
 }
 
-const fmtDur = (min) => {
-  if (min <= 0) return "0m";
-  const h = Math.floor(min / 60), m = min % 60;
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+// localStorage boolean prefs ("1"/"0", default-true unless stored "0").
+const pref = {
+  getBool: (k) => localStorage.getItem(k) !== "0",
+  setBool: (k, v) => localStorage.setItem(k, v ? "1" : "0"),
 };
-const fmtClock = (min) =>
-  new Date(Date.now() + min * 60000).toLocaleTimeString([], {
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  });
-
-// Estimate when the 5h utilization hits 100% from its recent slope. Returns
-// minutes-to-limit, or null if not climbing / not enough samples yet.
-let pctSamples = [];
-function estimateEtaMin(currentPct) {
-  const now = Date.now();
-  const last = pctSamples[pctSamples.length - 1];
-  if (last && currentPct < last.pct - 3) pctSamples = []; // block reset → restart
-  pctSamples.push({ t: now, pct: currentPct });
-  pctSamples = pctSamples.filter((s) => now - s.t <= 10 * 60000);
-  if (pctSamples.length < 2) return null;
-  const a = pctSamples[0], b = pctSamples[pctSamples.length - 1];
-  const dtMin = (b.t - a.t) / 60000;
-  if (dtMin < 0.8) return null;
-  const rate = (b.pct - a.pct) / dtMin; // % per minute
-  if (rate <= 0.05) return null;
-  return Math.max(0, Math.round((100 - currentPct) / rate));
-}
-
-// "rejected" (over/throttled) | "risk" (will hit before reset) | "warning" | "ok"
-function riskState(u, etaMin) {
-  if (u.current_pct >= 100 || u.status === "rejected") return "rejected";
-  if (etaMin != null && etaMin < u.current_reset_min) return "risk";
-  if (u.status === "allowed_warning" || u.current_pct >= 80) return "warning";
-  return "ok";
-}
-
-let notified80 = false;
-async function notify(title, body) {
-  try {
-    const N = window.__TAURI__.notification;
-    let granted = await N.isPermissionGranted();
-    if (!granted) granted = (await N.requestPermission()) === "granted";
-    if (granted) await N.sendNotification({ title, body });
-  } catch {
-    /* headless / denied */
-  }
-}
-function maybeNotify(u) {
-  if (u.current_pct < 70) notified80 = false; // re-arm after reset
-  if (notifEnabled && u.current_pct >= 80 && !notified80) {
-    notified80 = true;
-    notify(
-      "Claude Usage Widget",
-      `Your Claude Code 5h usage block is at ${u.current_pct}% — resets ${fmtClock(u.current_reset_min)} (in ${fmtDur(u.current_reset_min)}). Consider wrapping up.`,
-    );
-  }
-}
 
 const el = {};
 function cache() {
@@ -137,62 +98,92 @@ function cache() {
     "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
     "settingsBtn", "themeSeg", "planSeg", "notifToggle", "sSub", "sBlock", "sMonth", "sValue",
     "curPct", "curBar", "curReset", "wkPct", "wkBar", "wkReset",
-    "statusText", "statusBar", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
+    "statusText", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
   ]) {
     el[id] = document.getElementById(id);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Mascot animation engine — palette-indexed 20×20 frames; draws to anim.canvas.
-// ---------------------------------------------------------------------------
-const anim = { file: null, frames: [], palette: [], idx: 0, timer: null, canvas: null };
+// Segmented controls (theme, plan).
+function bindSeg(seg, dataKey, onPick) {
+  seg.addEventListener("click", (e) => {
+    const b = e.target.closest(".seg-btn");
+    if (b) onPick(b.dataset[dataKey]);
+  });
+}
+function setSegActive(seg, dataKey, value) {
+  for (const b of seg.querySelectorAll(".seg-btn"))
+    b.classList.toggle("active", b.dataset[dataKey] === value);
+}
 
-function drawFrame(frame) {
-  if (!anim.canvas) return;
-  const ctx = anim.canvas.getContext("2d");
-  ctx.clearRect(0, 0, 20, 20);
-  for (let y = 0; y < frame.grid.length; y++) {
-    const row = frame.grid[y];
-    for (let x = 0; x < row.length; x++) {
-      const color = anim.palette[row[x]];
+// ---------------------------------------------------------------------------
+// Mascot animation engine — 20×20 palette-indexed frames, pre-rendered once to
+// offscreen canvases (one drawImage per tick instead of ~400 fillRects), JSON
+// cached per file, paused while the document is hidden.
+// ---------------------------------------------------------------------------
+const animCache = new Map(); // file → [{hold, bmp}]
+const anim = { file: null, frames: [], idx: 0, timer: null, canvas: null, ctx: null };
+
+function prerenderFrame(grid, palette) {
+  const c = document.createElement("canvas");
+  c.width = 20;
+  c.height = 20;
+  const x = c.getContext("2d");
+  for (let y = 0; y < grid.length; y++) {
+    const row = grid[y];
+    for (let i = 0; i < row.length; i++) {
+      const color = palette[row[i]];
       if (!color || color === "transparent") continue;
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, 1, 1);
+      x.fillStyle = color;
+      x.fillRect(i, y, 1, 1);
     }
   }
+  return c;
+}
+
+async function loadAnim(file) {
+  if (!animCache.has(file)) {
+    const data = await (await fetch(`/assets/animations/${file}`)).json();
+    const palette = data.palette || ["transparent", "#CD7F6A", "#0f0f0f"];
+    animCache.set(
+      file,
+      (data.frames || []).map((f) => ({ hold: f.hold || 120, bmp: prerenderFrame(f.grid, palette) })),
+    );
+  }
+  return animCache.get(file);
 }
 
 function redraw() {
-  if (anim.frames[anim.idx]) drawFrame(anim.frames[anim.idx]);
+  if (!anim.ctx || !anim.frames[anim.idx]) return;
+  anim.ctx.clearRect(0, 0, 20, 20);
+  anim.ctx.drawImage(anim.frames[anim.idx].bmp, 0, 0);
 }
 
 function setCanvas(canvasEl) {
-  if (anim.canvas && anim.canvas !== canvasEl) {
-    anim.canvas.getContext("2d").clearRect(0, 0, 20, 20);
-  }
+  if (anim.ctx && anim.canvas !== canvasEl) anim.ctx.clearRect(0, 0, 20, 20);
   anim.canvas = canvasEl;
+  anim.ctx = canvasEl.getContext("2d");
   redraw();
 }
 
 function playStep() {
   if (!anim.frames.length) return;
-  const frame = anim.frames[anim.idx];
-  drawFrame(frame);
+  redraw();
+  const hold = anim.frames[anim.idx].hold;
   anim.idx = (anim.idx + 1) % anim.frames.length;
-  anim.timer = setTimeout(playStep, frame.hold || 120);
+  anim.timer = setTimeout(playStep, hold);
 }
 
 async function setAnim(file) {
   if (file === anim.file) return;
   anim.file = file;
   try {
-    const data = await (await fetch(`/assets/animations/${file}`)).json();
-    anim.frames = data.frames || [];
-    anim.palette = data.palette || ["transparent", "#CD7F6A", "#0f0f0f"];
+    const frames = await loadAnim(file);
+    if (anim.file !== file) return; // superseded while loading
+    anim.frames = frames;
     anim.idx = 0;
-    if (anim.timer) clearTimeout(anim.timer);
-    playStep();
+    clearTimeout(anim.timer);
+    if (!document.hidden) playStep();
   } catch {
     /* keep previous animation */
   }
@@ -200,12 +191,17 @@ async function setAnim(file) {
 
 function cycleAnim() {
   const i = ANIMS.indexOf(anim.file);
-  anim.file = null; // force reload onto the (possibly new) canvas
   setAnim(ANIMS[(i + 1) % ANIMS.length]);
 }
 
+// Pause the ~8fps loop while the webview isn't visible (battery).
+document.addEventListener("visibilitychange", () => {
+  clearTimeout(anim.timer);
+  if (!document.hidden) playStep();
+});
+
 // ---------------------------------------------------------------------------
-// View state machine: compact | info | creature
+// View state machine: compact | info | creature | settings
 // ---------------------------------------------------------------------------
 let view = "compact";
 let baseBeforeCreature = "compact";
@@ -213,8 +209,7 @@ let baseBeforeCreature = "compact";
 async function resizeWindow(w, h) {
   try {
     const T = window.__TAURI__;
-    // LogicalSize lives in __TAURI__.dpi (not .window) — using the wrong module
-    // made setSize throw, so the window never grew and the info panel clipped.
+    // LogicalSize lives in __TAURI__.dpi (not .window).
     const LogicalSize = (T.dpi && T.dpi.LogicalSize) || T.window.LogicalSize;
     await T.window.getCurrentWindow().setSize(new LogicalSize(w, h));
   } catch {
@@ -243,7 +238,6 @@ async function setView(mode) {
     setCanvas(el.mascot);
     const b = lastActive ? bandFor(lastActive.current_pct) : 0;
     lastBand = b;
-    anim.file = null;
     setAnim(BAND_ANIM[b]);
   }
   el.expandBtn.textContent = mode === "info" ? "⤡" : "⤢";
@@ -271,7 +265,7 @@ async function applyPinned(on) {
   el.pinBtn.title = on
     ? "floating popover (all desktops) — click to unpin"
     : "click to float on all desktops";
-  localStorage.setItem("cuw-pinned", on ? "1" : "0");
+  pref.setBool("cuw-pinned", on);
 }
 
 // ---------------------------------------------------------------------------
@@ -279,25 +273,23 @@ async function applyPinned(on) {
 // ---------------------------------------------------------------------------
 let theme = "dark";
 let notifEnabled = true;
-let planManual = null; // user override ('pro'|'max5'|'max20'); null = auto
-let planAuto = null; // best-effort detected
+let planManual = null; // user-selected plan; null until chosen
 let lastCost = null; // last get_cost active payload
 let monthCost = null; // current month's API-equivalent $ (get_month_cost)
 
-const effectivePlan = () => planManual || planAuto || "max20";
+const effectivePlan = () => planManual || "max20";
 
 function applyTheme(t) {
   theme = t === "light" ? "light" : "dark";
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("cuw-theme", theme);
-  for (const b of el.themeSeg.querySelectorAll(".seg-btn"))
-    b.classList.toggle("active", b.dataset.themeVal === theme);
+  setSegActive(el.themeSeg, "themeVal", theme);
 }
 
 function applyNotif(on) {
   notifEnabled = !!on;
   el.notifToggle.setAttribute("aria-checked", notifEnabled ? "true" : "false");
-  localStorage.setItem("cuw-notif", notifEnabled ? "1" : "0");
+  pref.setBool("cuw-notif", notifEnabled);
 }
 
 function setPlan(p) {
@@ -306,21 +298,9 @@ function setPlan(p) {
   renderSettings();
 }
 
-// Estimate the plan: 5h ceiling ≈ block weighted tokens / utilization%. Cache
-// reads are cheap so they're excluded from the weight. Best-effort only.
-function detectPlan() {
-  if (!lastActive || lastActive.current_pct < 10 || !lastCost) return;
-  const weighted =
-    lastCost.input_tokens + lastCost.output_tokens + lastCost.cache_creation_tokens;
-  const ceiling = weighted / (lastActive.current_pct / 100);
-  planAuto = ceiling < 66000 ? "pro" : ceiling < 154000 ? "max5" : "max20";
-  if (!planManual) renderSettings();
-}
-
 function renderSettings() {
   const plan = effectivePlan();
-  for (const b of el.planSeg.querySelectorAll(".seg-btn"))
-    b.classList.toggle("active", b.dataset.plan === plan);
+  setSegActive(el.planSeg, "plan", plan);
   const sub = PLANS[plan].price;
   el.sSub.textContent = `$${sub}/mo`;
   el.sBlock.textContent = lastCost ? `$${lastCost.cost_usd.toFixed(2)}` : "—";
@@ -333,44 +313,52 @@ function renderSettings() {
   }
 }
 
-async function refreshMonth() {
-  try {
-    const m = await invoke("get_month_cost");
-    monthCost = m.state === "active" ? m.cost_usd : null;
-  } catch {
-    monthCost = null;
-  }
-  renderSettings();
+// ---------------------------------------------------------------------------
+// Data fetching — one guarded-invoke pattern for all three commands.
+// ---------------------------------------------------------------------------
+function guardedInvoke(cmd, onResult, onError) {
+  let busy = false;
+  return async () => {
+    if (busy) return; // don't stack calls if one is slow
+    busy = true;
+    try {
+      onResult(await invoke(cmd));
+    } catch (e) {
+      onError(e);
+    } finally {
+      busy = false;
+    }
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Cost data (ccusage) — only polled while the info panel is open.
-// ---------------------------------------------------------------------------
-let costTimer = null;
+const refresh = guardedInvoke("get_usage", (d) => render(d), (e) => showDegraded(String(e)));
+const refreshCost = guardedInvoke("get_cost", (c) => renderCost(c), (e) =>
+  renderCost({ state: "error", message: String(e) }),
+);
+const refreshMonth = guardedInvoke(
+  "get_month_cost",
+  (m) => {
+    monthCost = m.state === "active" ? m.cost_usd : null;
+    renderSettings();
+  },
+  () => {
+    monthCost = null;
+    renderSettings();
+  },
+);
 
+// Cost polling — only while the info panel is open (ccusage is local/free).
+let costTimer = null;
 function startCost() {
   if (costTimer) return;
   refreshCost();
   costTimer = setInterval(refreshCost, POLL_MS);
 }
 function stopCost() {
-  if (costTimer) {
-    clearInterval(costTimer);
-    costTimer = null;
-  }
+  clearInterval(costTimer);
+  costTimer = null;
 }
-let costInFlight = false;
-async function refreshCost() {
-  if (costInFlight) return; // don't stack ccusage spawns if one is slow
-  costInFlight = true;
-  try {
-    renderCost(await invoke("get_cost"));
-  } catch (e) {
-    renderCost({ state: "error", message: String(e) });
-  } finally {
-    costInFlight = false;
-  }
-}
+
 function renderCost(c) {
   const dash = () => {
     el.dCost.textContent = el.dBurn.textContent = el.dProj.textContent =
@@ -386,7 +374,6 @@ function renderCost(c) {
     const inAll = c.input_tokens + c.cache_read_tokens + c.cache_creation_tokens;
     el.dCache.textContent = inAll > 0 ? `${Math.round((c.cache_read_tokens / inAll) * 100)}%` : "—";
     lastCost = c;
-    detectPlan();
     if (view === "settings") renderSettings();
   } else if (c.state === "idle") {
     dash();
@@ -398,16 +385,70 @@ function renderCost(c) {
 }
 
 // ---------------------------------------------------------------------------
-// Usage data (rate-limit %) — drives bars + band animation.
+// ETA-to-limit + risk + notification
+// ---------------------------------------------------------------------------
+
+// Estimate when the 5h utilization hits 100% from its recent slope. Returns
+// minutes-to-limit, or null if not climbing / not enough samples yet.
+let pctSamples = [];
+function estimateEtaMin(currentPct) {
+  const now = Date.now();
+  const last = pctSamples[pctSamples.length - 1];
+  if (last && currentPct < last.pct - 3) pctSamples = []; // block reset → restart
+  pctSamples.push({ t: now, pct: currentPct });
+  pctSamples = pctSamples.filter((s) => now - s.t <= 10 * 60000);
+  if (pctSamples.length < 2) return null;
+  const a = pctSamples[0], b = pctSamples[pctSamples.length - 1];
+  const dtMin = (b.t - a.t) / 60000;
+  if (dtMin < 0.8) return null;
+  const rate = (b.pct - a.pct) / dtMin; // % per minute
+  if (rate <= 0.05) return null;
+  return Math.max(0, Math.round((100 - currentPct) / rate));
+}
+
+// "rejected" (over/throttled) | "risk" (will hit before reset) | "warning" | "ok"
+function riskState(u, etaMin) {
+  if (u.current_pct >= 100 || u.status === "rejected") return "rejected";
+  if (etaMin != null && etaMin < u.current_reset_min) return "risk";
+  if (u.status === "allowed_warning" || u.current_pct >= 80) return "warning";
+  return "ok";
+}
+
+let notifGranted = null; // resolved once, cached
+let notified80 = false;
+async function notify(title, body) {
+  try {
+    const N = window.__TAURI__.notification;
+    if (notifGranted === null) notifGranted = await N.isPermissionGranted();
+    if (!notifGranted) notifGranted = (await N.requestPermission()) === "granted";
+    if (notifGranted) await N.sendNotification({ title, body });
+  } catch {
+    /* headless / denied */
+  }
+}
+function maybeNotify(u) {
+  if (u.current_pct < 70) notified80 = false; // re-arm after reset
+  if (notifEnabled && u.current_pct >= 80 && !notified80) {
+    notified80 = true;
+    notify(
+      "Claude Usage Widget",
+      `Your Claude Code 5h usage block is at ${u.current_pct}% — resets ${fmtClock(u.current_reset_min)} (in ${fmtDur(u.current_reset_min)}). Consider wrapping up.`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Usage rendering — drives bars + band animation + risk footer.
 // ---------------------------------------------------------------------------
 let lastBand = -1;
 let statusIdx = 0;
 let lastActive = null;
-
-const setStale = (on) => (el.card.dataset.stale = on ? "true" : "false");
-
 let lastEtaMin = null;
 let lastRisk = "ok";
+let flatCount = 0;
+let lastPct = null;
+
+const setStale = (on) => (el.card.dataset.stale = on ? "true" : "false");
 
 function renderActive(u) {
   el.curPct.textContent = `${u.current_pct}%`;
@@ -424,7 +465,7 @@ function renderActive(u) {
   el.wkBar.style.background = heat(u.weekly_pct);
   el.wkReset.textContent = fmtReset(u.weekly_reset_min);
 
-  // ETA-to-limit + throttle status drives the footer + card color (computed on
+  // ETA-to-limit + throttle status drive the footer + card color (computed on
   // fresh data in render(); see lastRisk/lastEtaMin).
   el.card.dataset.status =
     lastRisk === "rejected" ? "rejected" : lastRisk === "ok" ? "ok" : "warning";
@@ -461,6 +502,9 @@ function render(data) {
   if (data.state === "active") {
     lastActive = data;
     statusIdx++;
+    // Track flat streaks for adaptive poll cadence.
+    flatCount = data.current_pct === lastPct ? flatCount + 1 : 0;
+    lastPct = data.current_pct;
     // Sample utilization + evaluate risk only on FRESH data (not stale re-renders).
     lastEtaMin = estimateEtaMin(data.current_pct);
     lastRisk = riskState(data, lastEtaMin);
@@ -472,17 +516,10 @@ function render(data) {
   }
 }
 
-let usageInFlight = false;
-async function refresh() {
-  if (usageInFlight) return; // don't stack API calls if one is slow
-  usageInFlight = true;
-  try {
-    render(await invoke("get_usage"));
-  } catch (e) {
-    showDegraded(String(e));
-  } finally {
-    usageInFlight = false;
-  }
+async function pollLoop() {
+  await refresh();
+  const delay = flatCount >= FLAT_SAMPLES_TO_SLOW ? POLL_SLOW_MS : POLL_MS;
+  setTimeout(pollLoop, delay);
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -502,24 +539,17 @@ window.addEventListener("DOMContentLoaded", () => {
   el.creatureBack.addEventListener("click", () => setView(baseBeforeCreature));
   el.closeBtn.addEventListener("click", closeApp);
   el.pinBtn.addEventListener("click", () => applyPinned(!pinned));
-  el.themeSeg.addEventListener("click", (e) => {
-    const b = e.target.closest(".seg-btn");
-    if (b) applyTheme(b.dataset.themeVal);
-  });
-  el.planSeg.addEventListener("click", (e) => {
-    const b = e.target.closest(".seg-btn");
-    if (b) setPlan(b.dataset.plan);
-  });
+  bindSeg(el.themeSeg, "themeVal", applyTheme);
+  bindSeg(el.planSeg, "plan", setPlan);
   el.notifToggle.addEventListener("click", () => applyNotif(!notifEnabled));
 
-  applyPinned(localStorage.getItem("cuw-pinned") !== "0"); // default on
+  applyPinned(pref.getBool("cuw-pinned")); // default on
   applyTheme(localStorage.getItem("cuw-theme") || "dark");
-  applyNotif(localStorage.getItem("cuw-notif") !== "0");
-  planManual = localStorage.getItem("cuw-plan"); // null → auto-detect
+  applyNotif(pref.getBool("cuw-notif"));
+  planManual = localStorage.getItem("cuw-plan"); // null until the user picks
   renderSettings();
 
-  refresh();
-  setInterval(refresh, POLL_MS);
+  pollLoop();
 });
 
 // Test hooks for headless rendering.

@@ -2,6 +2,7 @@ mod usage;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, LogicalPosition, Manager, WindowEvent};
 
@@ -11,18 +12,23 @@ use tauri::{AppHandle, LogicalPosition, Manager, WindowEvent};
 /// `primary_monitor()` returns `None` intermittently during `setup()`, so we
 /// prefer the `available_monitors()` entry at origin (0,0) = the main display.
 fn top_right_pos(window: &tauri::WebviewWindow) -> Option<LogicalPosition<f64>> {
-    let win_w = 280.0;
+    // Window width in logical points; fall back to the configured 280 if the
+    // window size isn't realized yet at setup time.
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let win_w = window
+        .outer_size()
+        .ok()
+        .filter(|s| s.width > 0)
+        .map(|s| s.width as f64 / scale)
+        .unwrap_or(280.0);
     let margin = 16.0;
 
-    let place = |m: &tauri::Monitor| {
+    let place = move |m: &tauri::Monitor| {
         // Monitor geometry is physical; convert to logical points via the scale.
         let scale = m.scale_factor();
-        let pos = m.position();
-        let size = m.size();
-        let mx = pos.x as f64 / scale;
-        let my = pos.y as f64 / scale;
-        let mw = size.width as f64 / scale;
-        LogicalPosition::new(mx + mw - win_w - margin, my + margin)
+        let pos = m.position().to_logical::<f64>(scale);
+        let size = m.size().to_logical::<f64>(scale);
+        LogicalPosition::new(pos.x + size.width - win_w - margin, pos.y + margin)
     };
 
     if let Ok(monitors) = window.available_monitors() {
@@ -39,11 +45,21 @@ fn top_right_pos(window: &tauri::WebviewWindow) -> Option<LogicalPosition<f64>> 
     window.current_monitor().ok().flatten().map(|m| place(&m))
 }
 
-/// `~/Library/Application Support/<bundle-id>/window.json` (local, not iCloud).
+// ---------------------------------------------------------------------------
+// Position persistence — `~/Library/Application Support/<bundle-id>/window.json`
+// (local, not iCloud). `Moved` fires continuously during a drag, so writes are
+// throttled to ~1/s with a final flush on close.
+// ---------------------------------------------------------------------------
+
+struct PosSaver {
+    pending: Option<LogicalPosition<f64>>,
+    last_write: Instant,
+}
+
+struct PosState(Mutex<PosSaver>);
+
 fn position_file(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_config_dir().ok()?;
-    let _ = std::fs::create_dir_all(&dir);
-    Some(dir.join("window.json"))
+    Some(app.path().app_config_dir().ok()?.join("window.json"))
 }
 
 fn load_saved_position(app: &AppHandle) -> Option<LogicalPosition<f64>> {
@@ -55,11 +71,39 @@ fn load_saved_position(app: &AppHandle) -> Option<LogicalPosition<f64>> {
     ))
 }
 
-fn save_position(app: &AppHandle, pos: LogicalPosition<f64>) {
+fn write_position(app: &AppHandle, pos: LogicalPosition<f64>) {
     if let Some(path) = position_file(app) {
-        let _ = std::fs::write(path, format!("{{\"x\":{},\"y\":{}}}", pos.x, pos.y));
+        let _ = std::fs::write(
+            path,
+            serde_json::json!({ "x": pos.x, "y": pos.y }).to_string(),
+        );
     }
 }
+
+/// Record a move; write through at most once per second.
+fn record_move(app: &AppHandle, pos: LogicalPosition<f64>) {
+    let state = app.state::<PosState>();
+    let mut saver = state.0.lock().unwrap();
+    saver.pending = Some(pos);
+    if saver.last_write.elapsed() >= Duration::from_secs(1) {
+        saver.last_write = Instant::now();
+        let pos = saver.pending.take().unwrap();
+        drop(saver);
+        write_position(app, pos);
+    }
+}
+
+fn flush_position(app: &AppHandle) {
+    let state = app.state::<PosState>();
+    let pending = state.0.lock().unwrap().pending.take();
+    if let Some(pos) = pending {
+        write_position(app, pos);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PiP mode
+// ---------------------------------------------------------------------------
 
 /// Whether PiP (pin) mode is on — so it can be re-asserted on window focus.
 struct Pinned(Mutex<bool>);
@@ -73,41 +117,38 @@ struct Pinned(Mutex<bool>);
 /// re-applies the bit, so it persists across Space switches — raw objc
 /// `CanJoinAllSpaces` was getting reset by later events). FullScreenAuxiliary +
 /// level are added on top via objc, OR'd into the current behavior so the
-/// CanJoinAllSpaces bit Tauri set isn't clobbered.
-#[cfg(target_os = "macos")]
+/// CanJoinAllSpaces bit Tauri set isn't clobbered. Floating over OTHER apps'
+/// fullscreen Spaces additionally requires the window to be a non-activating
+/// NSPanel — done once in `setup` via tauri-nspanel.
 fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
-    use objc::{msg_send, runtime::Object, sel, sel_impl};
-    // Force the level to (re)apply: set_always_on_top is a no-op when unchanged.
-    let _ = window.set_always_on_top(!on);
+    // Keep Tauri's internal always-on-top flag in sync; the real level is set
+    // directly below (setLevel wins over whatever this applies).
     let _ = window.set_always_on_top(on);
     // Managed CanJoinAllSpaces (persists across Space switches).
     let _ = window.set_visible_on_all_workspaces(on);
 
-    if let Ok(ptr) = window.ns_window() {
-        let ns_window = ptr as *mut Object;
-        const FULLSCREEN_AUXILIARY: u64 = 1 << 8;
-        const STATIONARY: u64 = 1 << 4;
-        // Above fullscreen content. Screen-saver level is the level real overlay
-        // apps use to sit over other apps' fullscreen Spaces.
-        const NS_SCREEN_SAVER_WINDOW_LEVEL: i64 = 1000;
-        unsafe {
-            // Keep whatever Tauri set (incl. CanJoinAllSpaces) and add fullscreen
-            // overlay + stationary. Keep FullScreenAuxiliary even when unpinned so
-            // it can overlay a fullscreen Space (like a Meet window).
-            let cur: u64 = msg_send![ns_window, collectionBehavior];
-            let behavior = cur | FULLSCREEN_AUXILIARY | STATIONARY;
-            let level: i64 = if on { NS_SCREEN_SAVER_WINDOW_LEVEL } else { 0 };
-            let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
-            let _: () = msg_send![ns_window, setLevel: level];
+    #[cfg(target_os = "macos")]
+    {
+        use objc::{msg_send, runtime::Object, sel, sel_impl};
+        if let Ok(ptr) = window.ns_window() {
+            let ns_window = ptr as *mut Object;
+            const FULLSCREEN_AUXILIARY: u64 = 1 << 8;
+            const STATIONARY: u64 = 1 << 4;
+            // Above fullscreen content. Screen-saver level is what real overlay
+            // apps use to sit over other apps' fullscreen Spaces.
+            const NS_SCREEN_SAVER_WINDOW_LEVEL: i64 = 1000;
+            unsafe {
+                // Keep whatever Tauri set (incl. CanJoinAllSpaces) and add fullscreen
+                // overlay + stationary. Keep FullScreenAuxiliary even when unpinned so
+                // it can overlay a fullscreen Space (like a Meet window).
+                let cur: u64 = msg_send![ns_window, collectionBehavior];
+                let behavior = cur | FULLSCREEN_AUXILIARY | STATIONARY;
+                let level: i64 = if on { NS_SCREEN_SAVER_WINDOW_LEVEL } else { 0 };
+                let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+                let _: () = msg_send![ns_window, setLevel: level];
+            }
         }
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
-    let _ = window.set_always_on_top(!on);
-    let _ = window.set_always_on_top(on);
-    let _ = window.set_visible_on_all_workspaces(on);
 }
 
 /// Toggle PiP mode from the frontend (the pin button).
@@ -119,12 +160,20 @@ fn set_pinned(window: tauri::WebviewWindow, state: tauri::State<Pinned>, on: boo
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_nspanel::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+
+    builder
         .manage(Pinned(Mutex::new(true)))
+        .manage(PosState(Mutex::new(PosSaver {
+            pending: None,
+            last_write: Instant::now(),
+        })))
         .setup(|app| {
+            if let Some(dir) = app.path().app_config_dir().ok() {
+                let _ = std::fs::create_dir_all(dir);
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 // Restore the remembered position; otherwise top-right on first run.
@@ -153,11 +202,13 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            // Remember where the user drops the widget.
+            // Remember where the user drops the widget (throttled; flushed on close).
             WindowEvent::Moved(phys) => {
                 let scale = window.scale_factor().unwrap_or(1.0);
-                let logical = LogicalPosition::new(phys.x as f64 / scale, phys.y as f64 / scale);
-                save_position(window.app_handle(), logical);
+                record_move(window.app_handle(), phys.to_logical::<f64>(scale));
+            }
+            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+                flush_position(window.app_handle());
             }
             // Re-assert PiP when the widget regains focus (macOS can reset the
             // window level / fullscreen behavior across Space switches).
