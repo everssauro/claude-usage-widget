@@ -152,6 +152,11 @@ fn read_token() -> Option<String> {
             return Some(t.trim().to_string());
         }
     }
+    // The widget's own "Sign in with Claude" login takes precedence (it manages
+    // its own expiry/refresh, so it skips the TTL cache below).
+    if let Some(t) = crate::auth::current_access_token() {
+        return Some(t);
+    }
     let mut cache = token_cache().lock().unwrap();
     if let Some((token, at)) = cache.as_ref() {
         if at.elapsed() < TOKEN_TTL {
@@ -165,6 +170,11 @@ fn read_token() -> Option<String> {
 
 fn invalidate_token_cache() {
     token_cache().lock().unwrap().take();
+}
+
+/// Whether a Claude Code login exists on this machine (Keychain/credentials.json).
+pub(crate) fn has_native_token() -> bool {
+    read_token_uncached().is_some()
 }
 
 fn now_unix() -> f64 {
@@ -188,7 +198,7 @@ fn http_agent() -> &'static ureq::Agent {
 fn fetch_usage() -> UsageView {
     let Some(token) = read_token() else {
         return UsageView::Error {
-            message: "No Claude Code token (sign in to Claude Code first)".to_string(),
+            message: "No Claude account connected".to_string(),
         };
     };
 

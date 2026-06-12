@@ -356,6 +356,70 @@ body {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* ---- connect view ("Sign in with Claude") ---- */
+.connect {
+  display: none;
+  position: relative;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  flex: 1;
+  padding: 6px 8px;
+}
+.card[data-view="connect"] .meters,
+.card[data-view="connect"] .status,
+.card[data-view="connect"] .overlay {
+  display: none;
+}
+.card[data-view="connect"] .connect {
+  display: flex;
+}
+.connect-title {
+  font-family: "Tiempos", Georgia, serif;
+  font-size: 17px;
+}
+.connect-sub {
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.4;
+}
+.connect-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 9px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.connect-btn:hover {
+  filter: brightness(1.1);
+}
+.code-input {
+  width: 92%;
+  background: var(--panel);
+  border: 1px solid var(--track);
+  border-radius: 8px;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  padding: 7px 9px;
+  outline: none;
+}
+.connect-hint {
+  font-size: 10.5px;
+  color: var(--dim);
+  line-height: 1.35;
+  max-width: 94%;
+}
+.account-btn {
+  margin-left: auto;
+  background: var(--pill-bg);
+  color: var(--fg);
+}
+
 /* ---- light theme (Claude palette) ---- */
 :root[data-theme="light"] {
   --bg: #f4f2ec;

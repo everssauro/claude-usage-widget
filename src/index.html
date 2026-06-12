@@ -94,12 +94,27 @@
             <button class="seg-btn" data-plan="max20">Max&nbsp;20×</button>
           </div>
         </div>
+        <div class="set-row">
+          <span class="set-label">Account</span>
+          <button id="accountBtn" class="seg-btn account-btn">—</button>
+        </div>
         <div class="set-cost">
           <div class="drow"><span class="dl">Subscription</span><span id="sSub" class="dv">—</span></div>
           <div class="drow"><span class="dl">API-equiv · block</span><span id="sBlock" class="dv">—</span></div>
           <div class="drow"><span class="dl">API-equiv · month</span><span id="sMonth" class="dv">—</span></div>
           <div class="drow"><span class="dl">Value</span><span id="sValue" class="dv">—</span></div>
         </div>
+      </section>
+
+      <!-- Connect view — "Sign in with Claude" (OAuth PKCE) -->
+      <section class="connect">
+        <span class="connect-title">Connect your Claude account</span>
+        <span class="connect-sub">Claude Code logins are detected automatically. No Claude Code? Sign in directly:</span>
+        <button id="connectStart" class="connect-btn">Sign in with Claude ↗</button>
+        <input id="codeInput" class="code-input" placeholder="paste the code here" hidden />
+        <button id="codeSubmit" class="connect-btn" hidden>Connect</button>
+        <span id="connectHint" class="connect-hint"></span>
+        <button id="connectBack" class="hbtn back" title="back">↩</button>
       </section>
 
       <!-- Creature mode: big idle Clawd; click changes figure -->
@@ -121,6 +136,7 @@
       <div class="overlay overlay-error">
         <span class="err-title">no signal</span>
         <span id="errMsg" class="err-msg"></span>
+        <button id="connectBtn" class="connect-btn">Connect account</button>
       </div>
     </main>
 

@@ -43,7 +43,13 @@ const STATUS_WORDS = [
   "Ruminating…",
 ];
 
-const SIZES = { compact: [280, 300], info: [280, 500], creature: [280, 300], settings: [280, 360] };
+const SIZES = {
+  compact: [280, 300],
+  info: [280, 500],
+  creature: [280, 300],
+  settings: [280, 400],
+  connect: [280, 340],
+};
 
 // Subscription tiers (USD/month). Plan is user-selected in settings — the
 // rate-limit % doesn't map to token counts in any documented way, so
@@ -99,6 +105,8 @@ function cache() {
     "settingsBtn", "themeSeg", "planSeg", "notifToggle", "sSub", "sBlock", "sMonth", "sValue",
     "curPct", "curBar", "curReset", "wkPct", "wkBar", "wkReset",
     "statusText", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
+    "connectBtn", "connectStart", "codeInput", "codeSubmit", "connectHint", "connectBack",
+    "accountBtn",
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -229,6 +237,7 @@ async function setView(mode) {
     refreshCost(); // block API-equiv (once)
     refreshMonth(); // month API-equiv
     renderSettings();
+    refreshAuthRow();
   }
 
   if (mode === "creature") {
@@ -296,6 +305,55 @@ function setPlan(p) {
   planManual = p;
   localStorage.setItem("cuw-plan", p);
   renderSettings();
+}
+
+// ---------------------------------------------------------------------------
+// Account / "Sign in with Claude" (OAuth PKCE — auth.rs)
+// ---------------------------------------------------------------------------
+let authState = "none"; // own | claude_code | none
+
+async function refreshAuthRow() {
+  try {
+    authState = await invoke("auth_status");
+  } catch {
+    authState = "none";
+  }
+  el.accountBtn.textContent =
+    authState === "own"
+      ? "Connected — sign out"
+      : authState === "claude_code"
+        ? "Claude Code ✓ · switch"
+        : "Sign in";
+}
+
+async function startConnect() {
+  setView("connect");
+  el.codeInput.hidden = false;
+  el.codeSubmit.hidden = false;
+  el.connectHint.textContent = "Opening browser… approve, copy the code, paste it above.";
+  try {
+    await invoke("start_login");
+  } catch (e) {
+    el.connectHint.textContent = String(e);
+  }
+}
+
+async function submitCode() {
+  const code = el.codeInput.value.trim();
+  if (!code) return;
+  el.connectHint.textContent = "Connecting…";
+  try {
+    await invoke("finish_login", { code });
+    el.connectHint.textContent = "Connected ✓";
+    el.codeInput.value = "";
+    lastActive = null; // force a fresh fetch with the new account
+    setView("compact");
+    el.card.dataset.state = "loading";
+    refresh();
+    refreshAuthRow();
+  } catch (e) {
+    el.connectHint.textContent = String(e);
+  }
 }
 
 function renderSettings() {
@@ -542,6 +600,21 @@ window.addEventListener("DOMContentLoaded", () => {
   bindSeg(el.themeSeg, "themeVal", applyTheme);
   bindSeg(el.planSeg, "plan", setPlan);
   el.notifToggle.addEventListener("click", () => applyNotif(!notifEnabled));
+  // Account / connect flow
+  el.connectBtn.addEventListener("click", startConnect); // from the error overlay
+  el.connectStart.addEventListener("click", startConnect); // re-open browser
+  el.codeSubmit.addEventListener("click", submitCode);
+  el.codeInput.addEventListener("keydown", (e) => e.key === "Enter" && submitCode());
+  el.connectBack.addEventListener("click", () => setView("compact"));
+  el.accountBtn.addEventListener("click", async () => {
+    if (authState === "own") {
+      await invoke("sign_out").catch(() => {});
+      refreshAuthRow();
+      refresh();
+    } else {
+      startConnect();
+    }
+  });
 
   applyPinned(pref.getBool("cuw-pinned")); // default on
   applyTheme(localStorage.getItem("cuw-theme") || "dark");

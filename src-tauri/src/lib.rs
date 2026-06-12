@@ -1,3 +1,4 @@
+mod auth;
 mod usage;
 
 use std::path::PathBuf;
@@ -158,6 +159,47 @@ fn set_pinned(window: tauri::WebviewWindow, state: tauri::State<Pinned>, on: boo
     apply_pip(&window, on);
 }
 
+// ---------------------------------------------------------------------------
+// "Sign in with Claude" commands (auth.rs)
+// ---------------------------------------------------------------------------
+
+/// Open the browser on the OAuth page; returns the URL (UI fallback link).
+#[tauri::command]
+async fn start_login() -> String {
+    tauri::async_runtime::spawn_blocking(auth::begin_login)
+        .await
+        .unwrap_or_default()
+}
+
+/// Exchange the pasted `code#state` for tokens and store them.
+#[tauri::command]
+async fn finish_login(code: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || auth::complete_login(&code))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// "own" (widget login) | "claude_code" (detected install) | "none".
+#[tauri::command]
+async fn auth_status() -> String {
+    tauri::async_runtime::spawn_blocking(|| {
+        if auth::signed_in() {
+            "own".to_string()
+        } else if usage::has_native_token() {
+            "claude_code".to_string()
+        } else {
+            "none".to_string()
+        }
+    })
+    .await
+    .unwrap_or_else(|_| "none".to_string())
+}
+
+#[tauri::command]
+fn sign_out() {
+    auth::sign_out();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
@@ -171,8 +213,9 @@ pub fn run() {
             last_write: Instant::now(),
         })))
         .setup(|app| {
-            if let Some(dir) = app.path().app_config_dir().ok() {
-                let _ = std::fs::create_dir_all(dir);
+            if let Ok(dir) = app.path().app_config_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                auth::set_config_dir(dir); // auth.json lives next to window.json
             }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -225,7 +268,11 @@ pub fn run() {
             usage::get_usage,
             usage::get_cost,
             usage::get_month_cost,
-            set_pinned
+            set_pinned,
+            start_login,
+            finish_login,
+            auth_status,
+            sign_out
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
