@@ -124,7 +124,10 @@ function maybeNotify(u) {
   if (u.current_pct < 70) notified80 = false; // re-arm after reset
   if (notifEnabled && u.current_pct >= 80 && !notified80) {
     notified80 = true;
-    notify("Claude usage", `5h block at ${u.current_pct}% — resets in ${fmtDur(u.current_reset_min)}`);
+    notify(
+      "Claude Usage Widget",
+      `Your Claude Code 5h usage block is at ${u.current_pct}% — resets ${fmtClock(u.current_reset_min)} (in ${fmtDur(u.current_reset_min)}). Consider wrapping up.`,
+    );
   }
 }
 

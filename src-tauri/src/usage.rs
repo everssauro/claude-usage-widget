@@ -577,4 +577,28 @@ mod tests {
             other => panic!("expected Error, got {other:?}"),
         }
     }
+
+    #[test]
+    fn month_cost_takes_last_row() {
+        let json = r#"{"monthly":[
+            {"month":"2026-04","totalCost":10.0},
+            {"month":"2026-05","totalCost":20.5},
+            {"month":"2026-06","totalCost":2874.57}
+        ]}"#;
+        match parse_month_cost(json) {
+            MonthCostView::Active { month, cost_usd } => {
+                assert_eq!(month, "2026-06");
+                assert_eq!(cost_usd, 2874.57);
+            }
+            other => panic!("expected Active, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn month_cost_empty_is_zero() {
+        match parse_month_cost(r#"{"monthly":[]}"#) {
+            MonthCostView::Active { cost_usd, .. } => assert_eq!(cost_usd, 0.0),
+            other => panic!("expected Active, got {other:?}"),
+        }
+    }
 }
