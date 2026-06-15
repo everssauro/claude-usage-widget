@@ -1,0 +1,20 @@
+# Minimal CI — runs the Rust unit-test gate on every push/PR.
+# (No installers are built or distributed; the app ships as source — see README.)
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
