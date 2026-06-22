@@ -49,9 +49,9 @@ Re-run `./install.sh` after `git pull` to update.
 
 ## Credit
 
-The concept, the Clawd pixel-art animations, and the "Usage" screen are from **[HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)** (an ESP32 desk dashboard) — Clawd animations by [@amaanbuilds](https://x.com/amaanbuilds) via [claudepix.vercel.app](https://claudepix.vercel.app). This project reimplements that idea as a native macOS app. See [`REFERENCE.md`](REFERENCE.md).
+This is a software reimplementation of **[HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)** (an ESP32 desk dashboard for Claude Code usage). The concept, the "Usage" screen, and the Clawd pixel-art animations come from there — Clawd animations by **[@amaanbuilds](https://x.com/amaanbuilds)** via **[claudepix.vercel.app](https://claudepix.vercel.app)**. Huge thanks to them for the idea and the artwork. See [`REFERENCE.md`](REFERENCE.md).
 
-> ⚠️ **Private / personal use.** Like upstream, this bundles the copyrighted Clawd mascot and proprietary Anthropic fonts — so it is **not for public distribution** and ships no installers, only source. Build it yourself with `./install.sh`.
+> ⚠️ **Not affiliated with Anthropic. Personal / educational use.** Like upstream, this bundles the copyrighted **Clawd mascot** and proprietary **Anthropic fonts** (Tiempos, Styrene B) — used **without permission**. The original code here is non-proprietary, but because of those bundled assets the repo carries **no license** (all rights reserved). **Ships as source only — no installers.** If you fork or copy this, be aware of that. *You have been warned.* 🫡
 
 ## Dev
 

@@ -29,5 +29,15 @@ Consequences / guardrails:
 - Data source also changed: live **Claude Code OAuth rate-limit %** (subscription, not API-billed), not just `ccusage`. See `CLAUDE.md`.
 - Earlier original assets (the meter glyph/icon) are retained in git history if we ever revert to clean-room.
 
-## If we ever want a PUBLIC fork later
-Per Ton's plan: if a public release is wanted, fork `HermannBjorgvin/Clawdmeter` on GitHub and place our code there as a fork of his — done deliberately at that point, not now. Keeping this repo independent/private keeps options open and clean.
+## 🟢 DECISION 2026-06-15 — PUBLIC, source-only, credited (supersedes the PRIVATE-ONLY rule)
+The owner chose to make the repo **public** as a credited reimplementation of Clawdmeter, **keeping the assets as-is** (no clean-up), accepting the same risk posture as upstream + its ~195 forks.
+
+Rationale: going public removes the collaborator-access friction for testers; source-only public forks of Clawdmeter are the de-facto norm and low practical risk.
+
+Guardrails (the mitigations chosen):
+- **Source only — NO installers/binaries distributed.** `bundle.targets` excludes `.dmg`; CI runs tests only. Distributing built binaries (vs source) is the step that materially raises exposure, so we don't.
+- **No license** on the repo (all rights reserved), mirroring upstream — because it bundles the copyrighted Clawd mascot + proprietary Anthropic fonts (Tiempos = Klim, StyreneB = Commercial Type) used **without permission**. README carries the explicit "not affiliated / personal use / you have been warned" disclaimer.
+- **Prominent credit** to Clawdmeter (HermannBjorgvin) + @amaanbuilds/ClaudePix.
+- **Acknowledged highest-risk element:** committing the commercial font files (.otf) to a *public* repo is the spiciest part (font foundries care most). The owner accepted this. The clean exit if ever needed: swap the 2 fonts for OFL/free lookalikes (kills that risk, keeps ~90% of the look) — see git history for the earlier original meter glyph too.
+
+(Earlier decisions retained above for history: 2026-06-10 = faithful clone, private-only.)
