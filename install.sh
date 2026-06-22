@@ -68,15 +68,28 @@ if [ "$OS" = "Darwin" ]; then
   info "First run: if it asks for Keychain access, click Allow."
   info "No Claude Code on this Mac? Click the mascot's settings ⚙ → Account → Sign in with Claude."
 else
-  BIN="src-tauri/target/release/claude-usage-widget"
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$HOME/.local/share/icons"
   APPIMG="$(ls src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1 || true)"
   if [ -n "$APPIMG" ]; then
-    chmod +x "$APPIMG"
-    ok "AppImage: $APPIMG"
-    bold "Done — run it with: \"$APPIMG\""
+    DEST="$HOME/.local/bin/claude-usage-widget.AppImage"
+    cp -f "$APPIMG" "$DEST"
   else
-    ok "Binary: $BIN"
-    bold "Done — run it with: \"$BIN\""
+    DEST="$HOME/.local/bin/claude-usage-widget"
+    cp -f "src-tauri/target/release/claude-usage-widget" "$DEST"
   fi
+  chmod +x "$DEST"
+  cp -f "src-tauri/icons/128x128.png" "$HOME/.local/share/icons/claude-usage-widget.png" 2>/dev/null || true
+  cat > "$HOME/.local/share/applications/claude-usage-widget.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Claude Usage Widget
+Exec=$DEST
+Icon=claude-usage-widget
+Categories=Utility;
+EOF
+  ok "Installed to ~/.local/bin (+ app-menu entry)"
+  ( "$DEST" >/dev/null 2>&1 & )
+  bold "Done — launched (also in your app menu as 'Claude Usage Widget')."
+  info "No Claude Code here? Open ⚙ settings → Account → Sign in with Claude."
   info "Linux: PiP degrades to always-on-top + all-workspaces (NSPanel is macOS-only)."
 fi

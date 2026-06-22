@@ -4,7 +4,15 @@ A tiny always-on-top **macOS desktop widget** for your live **Claude Code subscr
 
 ![compact](docs/screenshots/compact.png) ![expanded](docs/screenshots/info-expanded.png)
 
-## Install (one command)
+## Install — works on macOS & Linux
+
+**Easiest: ask Claude Code to do it.** Paste this to your Claude Code:
+
+> Clone https://github.com/everssauro/claude-usage-widget and run its `install.sh`.
+
+It reads the script and installs on whatever OS you're on.
+
+**Or do it yourself (one command):**
 
 ```bash
 git clone https://github.com/everssauro/claude-usage-widget.git
@@ -12,9 +20,13 @@ cd claude-usage-widget
 ./install.sh
 ```
 
-That's it — the script checks prerequisites (installs Rust if missing), builds, and drops the app in `/Applications` (launches it too). Re-run `./install.sh` any time to update after `git pull`.
+The script checks prerequisites (installs Rust if missing), builds, and installs:
+- **macOS** → `/Applications` (launches it; Apple Silicon).
+- **Linux** → `~/.local/bin` + an app-menu entry (installs the GTK/WebKit deps via apt).
 
-**Prerequisites it can't auto-install:** macOS with **Xcode Command Line Tools** (`xcode-select --install`) and **Node 20+** ([nodejs.org](https://nodejs.org) or `brew install node`). Linux is supported too (the script installs the GTK/WebKit deps via apt).
+Re-run `./install.sh` after `git pull` to update.
+
+**You still need:** **Node 20+** ([nodejs.org](https://nodejs.org) / `brew install node` / your package manager) and, on macOS, **Xcode Command Line Tools** (`xcode-select --install`).
 
 ## Connect your account
 
