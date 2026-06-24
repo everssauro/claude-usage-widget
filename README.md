@@ -4,29 +4,31 @@ A tiny always-on-top **macOS desktop widget** for your live **Claude Code subscr
 
 ![compact](docs/screenshots/compact.png) ![expanded](docs/screenshots/info-expanded.png)
 
-## Install — works on macOS & Linux
+## Install — macOS & Linux
 
-**Easiest: ask Claude Code to do it.** Paste this to your Claude Code:
+It's a standard [Tauri](https://tauri.app) app: you build it from source with `npm run tauri build`. No install script, nothing hidden.
 
-> Clone https://github.com/everssauro/claude-usage-widget and run its `install.sh`.
+**Easiest — ask Claude Code to do it.** Paste this to your Claude Code:
 
-It reads the script and installs on whatever OS you're on.
+> Clone https://github.com/everssauro/claude-usage-widget, build it with `npm run tauri build`, and put the app where I can launch it.
 
-**Or do it yourself (one command):**
+You'll see every command it runs.
 
-```bash
-git clone https://github.com/everssauro/claude-usage-widget.git
-cd claude-usage-widget
-./install.sh
-```
+**Or build it yourself:**
 
-The script checks prerequisites (installs Rust if missing), builds, and installs:
-- **macOS** → `/Applications` (launches it; Apple Silicon).
-- **Linux** → `~/.local/bin` + an app-menu entry (installs the GTK/WebKit deps via apt).
+1. **Prerequisites:** [Rust](https://rustup.rs) · [Node 20+](https://nodejs.org) · macOS: **Xcode Command Line Tools** (`xcode-select --install`) · Linux: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2`.
+2. **Build:**
+   ```bash
+   git clone https://github.com/everssauro/claude-usage-widget.git
+   cd claude-usage-widget
+   npm install
+   npm run tauri build
+   ```
+3. **Run it:**
+   - **macOS** (Apple Silicon) → open `src-tauri/target/release/bundle/macos/Claude Usage Widget.app` (drag it to `/Applications` to keep it). A self-built app isn't quarantined, so Gatekeeper won't block it.
+   - **Linux** → run the AppImage in `src-tauri/target/release/bundle/appimage/`.
 
-Re-run `./install.sh` after `git pull` to update.
-
-**You still need:** **Node 20+** ([nodejs.org](https://nodejs.org) / `brew install node` / your package manager) and, on macOS, **Xcode Command Line Tools** (`xcode-select --install`).
+Update later: `git pull && npm run tauri build`.
 
 ## Connect your account
 
