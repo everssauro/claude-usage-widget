@@ -23,8 +23,11 @@ const ANIMS = [
   "dance_djmix",
 ].map((n) => `${n}.json`);
 
-// Usage band → animation (busier as usage climbs).
-const BAND_ANIM = [
+// Mascot mood → animation, busier the FASTER you burn (driven by the 5h
+// utilization slope, not the absolute %). True to the upstream Clawdmeter, and
+// more useful: it shows "am I burning fast right now," which a level can't —
+// you can sit at 85% idle, or sprint from 30%. Blocked overrides to a sleep pose.
+const MOOD_ANIM = [
   "idle_breathe",
   "work_think",
   "work_coding",
@@ -61,10 +64,17 @@ const PLANS = {
 };
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
-const bandFor = (pct) =>
-  pct < 30 ? 0 : pct < 55 ? 1 : pct < 75 ? 2 : pct < 90 ? 3 : 4;
+// Burn rate (%/h) → mood tier. null (not enough samples yet) ⇒ resting.
+const moodFor = (rate) =>
+  rate == null ? 0 : rate < 2 ? 0 : rate < 8 ? 1 : rate < 20 ? 2 : rate < 40 ? 3 : 4;
 
-const heat = (pct) => `hsl(${90 - (clamp(pct, 0, 100) / 100) * 90} 55% 48%)`;
+// Color encodes ALERT state only — safe / warn(≥75) / danger(≥90). Magnitude is
+// read from the bar's LENGTH, never its hue: hue has no perceived order and ~8%
+// of men are colorblind, so a green→red gradient is the classic dashboard
+// mistake (NN/g preattentive attributes). Actual colors live in CSS [data-zone].
+const WARN_PCT = 75;
+const DANGER_PCT = 90;
+const zoneOf = (pct) => (pct >= DANGER_PCT ? "danger" : pct >= WARN_PCT ? "warn" : "safe");
 
 const fmtDur = (min) => {
   if (min <= 0) return "0m";
@@ -88,7 +98,13 @@ function fmtBig(n) {
 }
 
 function shortModels(models) {
-  const s = new Set((models || []).map((m) => m.replace(/^claude-/, "").replace(/-\d.*$/, "")));
+  const s = new Set(
+    (models || [])
+      // Drop ccusage pseudo-models like "<synthetic>" — Claude Code's own
+      // locally-generated messages (no real inference, no cost), not a model.
+      .filter((m) => m && !m.startsWith("<"))
+      .map((m) => m.replace(/^claude-/, "").replace(/-\d.*$/, "")),
+  );
   return [...s].join(" · ") || "—";
 }
 
@@ -102,9 +118,10 @@ const el = {};
 function cache() {
   for (const id of [
     "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
-    "settingsBtn", "themeSeg", "planSeg", "notifToggle", "sSub", "sBlock", "sMonth", "sValue",
-    "curPct", "curBar", "curReset", "wkPct", "wkBar", "wkReset",
-    "statusText", "errMsg", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
+    "settingsBtn", "themeSeg", "planSeg", "notifToggle", "glassToggle", "sSub", "sBlock", "sMonth", "sValue",
+    "curMeter", "curPct", "curBar", "curReset", "curTrend",
+    "wkMeter", "wkPct", "wkBar", "wkReset",
+    "statusText", "errMsg", "dEta", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
     "connectBtn", "connectStart", "codeInput", "codeSubmit", "connectHint", "connectBack",
     "accountBtn",
   ]) {
@@ -130,7 +147,7 @@ function setSegActive(seg, dataKey, value) {
 // cached per file, paused while the document is hidden.
 // ---------------------------------------------------------------------------
 const animCache = new Map(); // file → [{hold, bmp}]
-const anim = { file: null, frames: [], idx: 0, timer: null, canvas: null, ctx: null };
+const anim = { file: null, frames: [], idx: 0, canvas: null, ctx: null };
 
 function prerenderFrame(grid, palette) {
   const c = document.createElement("canvas");
@@ -174,12 +191,24 @@ function setCanvas(canvasEl) {
   redraw();
 }
 
-function playStep() {
+// rAF loop with a per-frame elapsed gate (preserves each frame's `hold` ms while
+// driving the redraw off the compositor clock). WebKit throttles/suspends rAF
+// when the window is occluded, the display sleeps, or it's on another Space —
+// cases `document.hidden` misses for an always-on-top widget — so the CPU stops
+// waking when nobody can see the mascot. (WebKit "How Web Content Can Affect
+// Power Usage".)
+let rafId = null;
+let lastTick = 0;
+function frameLoop(now) {
+  rafId = requestAnimationFrame(frameLoop);
   if (!anim.frames.length) return;
+  if (now - lastTick < anim.frames[anim.idx].hold) return;
+  lastTick = now;
   redraw();
-  const hold = anim.frames[anim.idx].hold;
   anim.idx = (anim.idx + 1) % anim.frames.length;
-  anim.timer = setTimeout(playStep, hold);
+}
+function startLoop() {
+  if (rafId == null) rafId = requestAnimationFrame(frameLoop);
 }
 
 async function setAnim(file) {
@@ -190,8 +219,8 @@ async function setAnim(file) {
     if (anim.file !== file) return; // superseded while loading
     anim.frames = frames;
     anim.idx = 0;
-    clearTimeout(anim.timer);
-    if (!document.hidden) playStep();
+    lastTick = 0; // show the new animation's first frame immediately
+    startLoop();
   } catch {
     /* keep previous animation */
   }
@@ -202,11 +231,8 @@ function cycleAnim() {
   setAnim(ANIMS[(i + 1) % ANIMS.length]);
 }
 
-// Pause the ~8fps loop while the webview isn't visible (battery).
-document.addEventListener("visibilitychange", () => {
-  clearTimeout(anim.timer);
-  if (!document.hidden) playStep();
-});
+// (rAF self-suspends when the widget is occluded/off-Space/display-asleep — no
+// manual visibilitychange pause needed; it also covers cases that event misses.)
 
 // ---------------------------------------------------------------------------
 // View state machine: compact | info | creature | settings
@@ -245,9 +271,9 @@ async function setView(mode) {
     setAnim("idle_breathe.json");
   } else if (prev === "creature") {
     setCanvas(el.mascot);
-    const b = lastActive ? bandFor(lastActive.current_pct) : 0;
-    lastBand = b;
-    setAnim(BAND_ANIM[b]);
+    const m = moodFor(lastRatePerHour);
+    lastMood = m;
+    setAnim(MOOD_ANIM[m]);
   }
   el.expandBtn.textContent = mode === "info" ? "⤡" : "⤢";
 }
@@ -282,6 +308,7 @@ async function applyPinned(on) {
 // ---------------------------------------------------------------------------
 let theme = "dark";
 let notifEnabled = true;
+let glassEnabled = false; // native macOS vibrancy; off by default
 let planManual = null; // user-selected plan; null until chosen
 let lastCost = null; // last get_cost active payload
 let monthCost = null; // current month's API-equivalent $ (get_month_cost)
@@ -299,6 +326,21 @@ function applyNotif(on) {
   notifEnabled = !!on;
   el.notifToggle.setAttribute("aria-checked", notifEnabled ? "true" : "false");
   pref.setBool("cuw-notif", notifEnabled);
+}
+
+// Glass = native macOS NSVisualEffectView behind the card (real frosted blur of
+// the desktop). The card CSS goes translucent (data-glass) to reveal it. Off by
+// default; persisted explicitly ("1"/"0", default "0").
+async function applyGlass(on) {
+  glassEnabled = !!on;
+  document.documentElement.dataset.glass = glassEnabled ? "on" : "off";
+  el.glassToggle.setAttribute("aria-checked", glassEnabled ? "true" : "false");
+  localStorage.setItem("cuw-glass", glassEnabled ? "1" : "0");
+  try {
+    await invoke("set_glass", { on: glassEnabled });
+  } catch {
+    /* headless / non-macOS */
+  }
 }
 
 function setPlan(p) {
@@ -446,34 +488,47 @@ function renderCost(c) {
 // ETA-to-limit + risk + notification
 // ---------------------------------------------------------------------------
 
-// Estimate when the 5h utilization hits 100% from its recent slope. Returns
-// minutes-to-limit, or null if not climbing / not enough samples yet.
+// Sample 5h utilization over a 10-min window → slope. Drives both the
+// ETA-to-limit ("keep going or stop?") and the trend arrow (burn sense).
+// Returns { etaMin: minutes-to-100% | null, ratePerHour: %/h | null }.
 let pctSamples = [];
-function estimateEtaMin(currentPct) {
+function estimateBurn(currentPct) {
   const now = Date.now();
   const last = pctSamples[pctSamples.length - 1];
   if (last && currentPct < last.pct - 3) pctSamples = []; // block reset → restart
   pctSamples.push({ t: now, pct: currentPct });
   pctSamples = pctSamples.filter((s) => now - s.t <= 10 * 60000);
-  if (pctSamples.length < 2) return null;
+  if (pctSamples.length < 2) return { etaMin: null, ratePerHour: null };
   const a = pctSamples[0], b = pctSamples[pctSamples.length - 1];
   const dtMin = (b.t - a.t) / 60000;
-  if (dtMin < 0.8) return null;
-  const rate = (b.pct - a.pct) / dtMin; // % per minute
-  if (rate <= 0.05) return null;
-  return Math.max(0, Math.round((100 - currentPct) / rate));
+  if (dtMin < 0.8) return { etaMin: null, ratePerHour: null };
+  const ratePerMin = (b.pct - a.pct) / dtMin; // % per minute
+  const etaMin =
+    ratePerMin > 0.05 ? Math.max(0, Math.round((100 - currentPct) / ratePerMin)) : null;
+  return { etaMin, ratePerHour: ratePerMin * 60 };
 }
 
-// "rejected" (over/throttled) | "risk" (will hit before reset) | "warning" | "ok"
+// Either limit blocks all prompts, so the BINDING window is whichever is nearer
+// its cap. 5h is volatile and usually maxes first; weekly is the painful
+// multi-day lockout people get blindsided by.
+const bindingOf = (u) => (u.weekly_pct > u.current_pct ? "weekly" : "current");
+
+// "rejected" (over/throttled) | "risk" (5h will hit before reset) | "warning" | "ok"
 function riskState(u, etaMin) {
-  if (u.current_pct >= 100 || u.status === "rejected") return "rejected";
+  if (u.current_pct >= 100 || u.weekly_pct >= 100 || u.status === "rejected")
+    return "rejected";
   if (etaMin != null && etaMin < u.current_reset_min) return "risk";
-  if (u.status === "allowed_warning" || u.current_pct >= 80) return "warning";
+  // Visuals (bar/footer/border) flip together at the warn zone; the louder
+  // push notifications live at 80/90/95.
+  if (u.status === "allowed_warning" || u.current_pct >= WARN_PCT || u.weekly_pct >= WARN_PCT)
+    return "warning";
   return "ok";
 }
 
 let notifGranted = null; // resolved once, cached
 let notified80 = false;
+let notified95 = false;
+let notifiedWeekly = false;
 async function notify(title, body) {
   try {
     const N = window.__TAURI__.notification;
@@ -485,12 +540,33 @@ async function notify(title, body) {
   }
 }
 function maybeNotify(u) {
-  if (u.current_pct < 70) notified80 = false; // re-arm after reset
-  if (notifEnabled && u.current_pct >= 80 && !notified80) {
+  // Re-arm each threshold once usage drops back below it (after a reset).
+  if (u.current_pct < 70) notified80 = false;
+  if (u.current_pct < DANGER_PCT) notified95 = false;
+  if (u.weekly_pct < 80) notifiedWeekly = false;
+  if (!notifEnabled) return;
+
+  // 5h block: escalate 80% → 95% (one notification per crossing, not both).
+  if (u.current_pct >= 95 && !notified95) {
+    notified95 = true;
+    notify(
+      "Claude Usage Widget",
+      `Your Claude Code 5h block is at ${u.current_pct}% — about to lock. Resets ${fmtClock(u.current_reset_min)} (in ${fmtDur(u.current_reset_min)}).`,
+    );
+  } else if (u.current_pct >= 80 && !notified80) {
     notified80 = true;
     notify(
       "Claude Usage Widget",
       `Your Claude Code 5h usage block is at ${u.current_pct}% — resets ${fmtClock(u.current_reset_min)} (in ${fmtDur(u.current_reset_min)}). Consider wrapping up.`,
+    );
+  }
+
+  // Weekly: the multi-day lockout. Independent of the 5h escalation.
+  if (u.weekly_pct >= DANGER_PCT && !notifiedWeekly) {
+    notifiedWeekly = true;
+    notify(
+      "Claude Usage Widget",
+      `Your WEEKLY Claude limit is at ${u.weekly_pct}% — hitting it locks you out until it resets (in ${fmtDur(u.weekly_reset_min)}).`,
     );
   }
 }
@@ -498,20 +574,40 @@ function maybeNotify(u) {
 // ---------------------------------------------------------------------------
 // Usage rendering — drives bars + band animation + risk footer.
 // ---------------------------------------------------------------------------
-let lastBand = -1;
+let lastMood = -1;
 let statusIdx = 0;
 let lastActive = null;
 let lastEtaMin = null;
+let lastRatePerHour = null;
 let lastRisk = "ok";
 let flatCount = 0;
 let lastPct = null;
 
 const setStale = (on) => (el.card.dataset.stale = on ? "true" : "false");
 
+// Upward 5h trend only (the thing that matters: burning fast). Flat/down → blank,
+// to keep the meter calm.
+function renderTrend(ratePerHour) {
+  el.curTrend.textContent =
+    ratePerHour != null && ratePerHour >= 1 ? `▲ ${Math.round(ratePerHour)}%/h` : "";
+}
+
+// Footer: the most decision-relevant string we can produce, named for the
+// binding window. Whimsy only when genuinely OK (the Clawdmeter charm).
+function statusLine(u, binding) {
+  if (lastRisk === "rejected")
+    return u.weekly_pct >= 100 ? "weekly limit reached" : "limit reached";
+  if (lastRisk === "risk") return `limit in ${fmtDur(lastEtaMin)}`;
+  if (lastRisk === "warning")
+    return binding === "weekly" ? `weekly ${u.weekly_pct}% — heads up` : "approaching limit";
+  return STATUS_WORDS[statusIdx % STATUS_WORDS.length];
+}
+
 function renderActive(u) {
+  // Bars: LENGTH = magnitude; zone (CSS [data-zone]) = alert color only.
   el.curPct.textContent = `${u.current_pct}%`;
   el.curBar.style.width = `${clamp(u.current_pct, 0, 100)}%`;
-  el.curBar.style.background = heat(u.current_pct);
+  el.curMeter.dataset.zone = zoneOf(u.current_pct);
   // 5h reset shows the clock time too ("plan a break around it"); weekly stays a countdown.
   el.curReset.textContent =
     u.current_reset_min > 0
@@ -520,27 +616,44 @@ function renderActive(u) {
 
   el.wkPct.textContent = `${u.weekly_pct}%`;
   el.wkBar.style.width = `${clamp(u.weekly_pct, 0, 100)}%`;
-  el.wkBar.style.background = heat(u.weekly_pct);
+  el.wkMeter.dataset.zone = zoneOf(u.weekly_pct);
   el.wkReset.textContent = fmtReset(u.weekly_reset_min);
+
+  renderTrend(lastRatePerHour);
+
+  // Mark the binding window — but only once there's real pressure, so low usage
+  // stays calm (no "winner" at 5% vs 3%).
+  const binding = bindingOf(u);
+  const pressure = Math.max(u.current_pct, u.weekly_pct) >= 50;
+  el.curMeter.dataset.binding = pressure && binding === "current" ? "true" : "false";
+  el.wkMeter.dataset.binding = pressure && binding === "weekly" ? "true" : "false";
 
   // ETA-to-limit + throttle status drive the footer + card color (computed on
   // fresh data in render(); see lastRisk/lastEtaMin).
   el.card.dataset.status =
     lastRisk === "rejected" ? "rejected" : lastRisk === "ok" ? "ok" : "warning";
-  el.statusText.textContent =
-    lastRisk === "rejected"
-      ? "limit reached"
-      : lastRisk === "risk"
-        ? `limit in ${fmtDur(lastEtaMin)}`
-        : lastRisk === "warning"
-          ? "approaching limit"
-          : STATUS_WORDS[statusIdx % STATUS_WORDS.length];
+  el.statusText.textContent = statusLine(u, binding);
 
+  // Info-panel headline: the most decision-relevant string — when the 5h limit
+  // will bite at the current burn. "—" = flat usage, no limit in sight.
+  el.dEta.textContent =
+    lastRisk === "rejected"
+      ? "reached"
+      : lastEtaMin != null
+        ? `~${fmtDur(lastEtaMin)}`
+        : "—";
+
+  // Mascot: settle to a "blocked" pose when locked out; otherwise the burn-rate mood.
   if (view !== "creature") {
-    const b = bandFor(u.current_pct);
-    if (b !== lastBand) {
-      setAnim(BAND_ANIM[b]);
-      lastBand = b;
+    if (lastRisk === "rejected") {
+      lastMood = -1;
+      setAnim("expression_sleep.json");
+    } else {
+      const m = moodFor(lastRatePerHour);
+      if (m !== lastMood) {
+        setAnim(MOOD_ANIM[m]);
+        lastMood = m;
+      }
     }
   }
   el.card.dataset.state = "active";
@@ -564,7 +677,9 @@ function render(data) {
     flatCount = data.current_pct === lastPct ? flatCount + 1 : 0;
     lastPct = data.current_pct;
     // Sample utilization + evaluate risk only on FRESH data (not stale re-renders).
-    lastEtaMin = estimateEtaMin(data.current_pct);
+    const burn = estimateBurn(data.current_pct);
+    lastEtaMin = burn.etaMin;
+    lastRatePerHour = burn.ratePerHour;
     lastRisk = riskState(data, lastEtaMin);
     maybeNotify(data);
     renderActive(data);
@@ -600,6 +715,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindSeg(el.themeSeg, "themeVal", applyTheme);
   bindSeg(el.planSeg, "plan", setPlan);
   el.notifToggle.addEventListener("click", () => applyNotif(!notifEnabled));
+  el.glassToggle.addEventListener("click", () => applyGlass(!glassEnabled));
   // Account / connect flow
   el.connectBtn.addEventListener("click", startConnect); // from the error overlay
   el.connectStart.addEventListener("click", startConnect); // re-open browser
@@ -619,6 +735,7 @@ window.addEventListener("DOMContentLoaded", () => {
   applyPinned(pref.getBool("cuw-pinned")); // default on
   applyTheme(localStorage.getItem("cuw-theme") || "dark");
   applyNotif(pref.getBool("cuw-notif"));
+  applyGlass(localStorage.getItem("cuw-glass") === "1"); // default off
   planManual = localStorage.getItem("cuw-plan"); // null until the user picks
   renderSettings();
 

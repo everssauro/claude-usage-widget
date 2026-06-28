@@ -36,4 +36,8 @@ objc = "0.2"
 # Converts the window to a real NSPanel so a non-activating overlay can float
 # over OTHER apps' fullscreen Spaces (regular windows are blocked from those).
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+# Native NSVisualEffectView frosted-glass backing for the optional glass mode —
+# the only way to blur the real desktop behind a transparent native window
+# (a WebView/backdrop-filter can't sample what's behind the OS window).
+window-vibrancy = "0.5"
 

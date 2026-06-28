@@ -15,13 +15,17 @@
 
 :root {
   --bg: #0a0a0c;
+  --card-bg: var(--bg); /* solid by default; glass mode makes it translucent */
   --panel: #17181a;
   --fg: #f3f3f1;
   --dim: #86877f;
   --pill-bg: #26272b;
   --track: #2a2b2e;
   --accent: #d2693f; /* Clawd orange — status, star, close */
-  --heat: hsl(90 55% 48%); /* pre-first-render placeholder; JS heat() takes over */
+  /* Alert zones: color signals state, never magnitude (bar length does that). */
+  --zone-safe: #6ba36e;
+  --zone-warn: #e0a13a;
+  --zone-danger: #e0726a;
 
   font-family: "StyreneB", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -52,7 +56,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: var(--bg);
+  background: var(--card-bg);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 18px;
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
@@ -99,8 +103,13 @@ body {
 .card[data-status="warning"] {
   border-color: rgba(224, 161, 58, 0.55);
 }
+/* blocked/locked-out — the moment the widget exists for: red veil takes the
+   whole card (works in both themes by layering over --bg) */
 .card[data-status="rejected"] {
   border-color: rgba(224, 114, 106, 0.7);
+  background:
+    linear-gradient(rgba(224, 114, 106, 0.1), rgba(224, 114, 106, 0.1)),
+    var(--card-bg);
 }
 .hbtn {
   background: none;
@@ -180,7 +189,7 @@ body {
   height: 100%;
   width: 0%;
   border-radius: 4px;
-  background: var(--heat);
+  background: var(--zone-safe);
   transition:
     width 0.5s ease,
     background 0.5s ease;
@@ -188,6 +197,33 @@ body {
 .reset {
   font-size: 12.5px;
   color: var(--dim);
+}
+.trend {
+  font-size: 11px;
+  color: var(--dim);
+  margin-left: 7px;
+}
+
+/* alert zones — color signals state only; bar length carries the magnitude */
+.meter[data-zone="warn"] .bar-fill {
+  background: var(--zone-warn);
+}
+.meter[data-zone="danger"] .bar-fill {
+  background: var(--zone-danger);
+}
+/* redundant cue for the ~8% colorblind: the % itself adopts the alert hue
+   (the footer text label + binding pill are the non-color channels) */
+.meter[data-zone="warn"] .pct {
+  color: var(--zone-warn);
+}
+.meter[data-zone="danger"] .pct,
+.meter[data-zone="danger"] .trend {
+  color: var(--zone-danger);
+}
+/* binding window = whichever is nearer its cap; subtle accent pill marks it */
+.meter[data-binding="true"] .pill {
+  background: var(--accent);
+  color: #fff;
 }
 
 /* ---- detail panel (info view) ---- */
@@ -217,6 +253,18 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ETA headline — the "keep going or stop?" line, set apart from the cost rows */
+.detail-eta {
+  font-size: 13.5px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.detail-eta .dv {
+  color: var(--accent);
+}
+:root[data-theme="light"] .detail-eta {
+  border-bottom-color: rgba(0, 0, 0, 0.1);
+}
 
 /* ---- footer status ---- */
 .status {
@@ -245,7 +293,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  background: var(--bg);
+  background: var(--card-bg);
   border-radius: 18px;
 }
 .mascot-big {
@@ -429,6 +477,9 @@ body {
   --pill-bg: #ebe8df;
   --track: #e4e1d6;
   --accent: #bf5d3a;
+  --zone-safe: #4e8a5a;
+  --zone-warn: #b8801c;
+  --zone-danger: #bf4a40;
 }
 :root[data-theme="light"] .card {
   border-color: rgba(0, 0, 0, 0.08);
@@ -436,6 +487,48 @@ body {
 }
 :root[data-theme="light"] .set-cost {
   border-top-color: rgba(0, 0, 0, 0.1);
+}
+
+/* ---- glass mode (native macOS vibrancy blurs the real desktop behind a
+   translucent card; toggled in settings, off by default). The card + chips go
+   semi-transparent so the NSVisualEffectView shows through. ---- */
+:root[data-glass="on"] {
+  --card-bg: rgba(8, 8, 10, 0.05); /* near-clear → almost pure frosted vibrancy */
+  --panel: rgba(54, 55, 62, 0.12);
+}
+:root[data-theme="light"][data-glass="on"] {
+  --card-bg: rgba(248, 246, 240, 0.1);
+  --panel: rgba(255, 255, 255, 0.18);
+}
+/* Specular sheen lives in the card BACKGROUND (behind all content, so it never
+   washes the text) — the top-left light reflection is what the eye reads as glass. */
+:root[data-glass="on"] .card {
+  background:
+    linear-gradient(157deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.03) 18%, transparent 42%),
+    var(--card-bg);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3), /* bright top rim */
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22), /* dark bottom rim → glass thickness */
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+}
+/* keep the blocked red veil working over the glass + sheen */
+:root[data-glass="on"] .card[data-status="rejected"] {
+  background:
+    linear-gradient(rgba(224, 114, 106, 0.18), rgba(224, 114, 106, 0.18)),
+    linear-gradient(157deg, rgba(255, 255, 255, 0.12) 0%, transparent 42%),
+    var(--card-bg);
+}
+:root[data-theme="light"][data-glass="on"] .card {
+  background:
+    linear-gradient(157deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.12) 18%, transparent 42%),
+    var(--card-bg);
+  border-color: rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 14px 34px rgba(60, 50, 30, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.06);
 }
 
 /* ---- data-state overlays (z2 over content; header z3 stays clickable) ---- */
@@ -449,7 +542,7 @@ body {
   justify-content: center;
   gap: 8px;
   border-radius: 18px;
-  background: var(--bg);
+  background: var(--card-bg);
 }
 .card[data-state="loading"] .overlay-loading,
 .card[data-state="error"] .overlay-error {

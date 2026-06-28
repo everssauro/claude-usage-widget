@@ -159,6 +159,52 @@ fn set_pinned(window: tauri::WebviewWindow, state: tauri::State<Pinned>, on: boo
     apply_pip(&window, on);
 }
 
+/// Toggle the macOS frosted-glass (vibrancy) backing behind the card. On → a
+/// native NSVisualEffectView blurs the real desktop behind the transparent
+/// window (the card CSS goes translucent to reveal it); off → the card's own
+/// opaque background shows (the default solid look). macOS-only; no-op elsewhere.
+const CARD_RADIUS: f64 = 18.0; // keep in sync with .card border-radius in styles.css
+
+#[tauri::command]
+fn set_glass(window: tauri::WebviewWindow, on: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc::{msg_send, runtime::Object, sel, sel_impl};
+        use window_vibrancy::{
+            apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+        };
+        if on {
+            // HudWindow = dark frosted material (matches the dark Clawd palette);
+            // keep it Active even when the non-activating panel isn't key.
+            let _ = apply_vibrancy(
+                &window,
+                NSVisualEffectMaterial::HudWindow,
+                Some(NSVisualEffectState::Active),
+                Some(CARD_RADIUS),
+            );
+        } else {
+            let _ = clear_vibrancy(&window);
+        }
+        // Clip the window contentView to the card's rounded rect — ALWAYS, glass or
+        // not. Once the view is layer-backed its square corners poke out past the
+        // rounded card (the rectangular NSVisualEffectView when glass is on, the
+        // opaque backing when it's off). The card is always the same rounded shape,
+        // so the clip is constant; only the vibrancy/translucency toggles.
+        if let Ok(ptr) = window.ns_window() {
+            let ns_window = ptr as *mut Object;
+            unsafe {
+                let content_view: *mut Object = msg_send![ns_window, contentView];
+                let _: () = msg_send![content_view, setWantsLayer: true];
+                let layer: *mut Object = msg_send![content_view, layer];
+                let _: () = msg_send![layer, setCornerRadius: CARD_RADIUS];
+                let _: () = msg_send![layer, setMasksToBounds: true];
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, on);
+}
+
 // ---------------------------------------------------------------------------
 // "Sign in with Claude" commands (auth.rs)
 // ---------------------------------------------------------------------------
@@ -269,6 +315,7 @@ pub fn run() {
             usage::get_cost,
             usage::get_month_cost,
             set_pinned,
+            set_glass,
             start_login,
             finish_login,
             auth_status,

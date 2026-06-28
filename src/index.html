@@ -40,16 +40,17 @@
       </header>
 
       <section class="meters">
-        <div class="meter">
+        <div class="meter" id="curMeter">
           <div class="meter-top">
             <span id="curPct" class="pct">—</span>
+            <span id="curTrend" class="trend"></span>
             <span class="pill">Current</span>
           </div>
           <div class="bar"><div id="curBar" class="bar-fill"></div></div>
           <span id="curReset" class="reset">—</span>
         </div>
 
-        <div class="meter">
+        <div class="meter" id="wkMeter">
           <div class="meter-top">
             <span id="wkPct" class="pct">—</span>
             <span class="pill">Weekly</span>
@@ -59,8 +60,14 @@
         </div>
       </section>
 
-      <!-- Expanded detail panel (info view) — fed by ccusage -->
+      <!-- Expanded detail panel (info view) — ETA headline + ccusage cost -->
       <section class="detail">
+        <div
+          class="drow detail-eta"
+          title="Forecast time until your 5h block hits 100% at the current burn rate. '—' = usage is flat right now, so there's no limit in sight."
+        >
+          <span class="dl">Time to limit</span><span id="dEta" class="dv">—</span>
+        </div>
         <div class="drow"><span class="dl">Cost</span><span id="dCost" class="dv">—</span></div>
         <div class="drow"><span class="dl">Burn</span><span id="dBurn" class="dv">—</span></div>
         <div class="drow"><span class="dl">Projected</span><span id="dProj" class="dv">—</span></div>
@@ -81,6 +88,10 @@
             <button class="seg-btn" data-theme-val="dark">Dark</button>
             <button class="seg-btn" data-theme-val="light">Light</button>
           </div>
+        </div>
+        <div class="set-row">
+          <span class="set-label">Glass effect</span>
+          <button id="glassToggle" class="switch" role="switch" aria-checked="false"></button>
         </div>
         <div class="set-row">
           <span class="set-label">Notifications</span>
