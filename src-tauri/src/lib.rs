@@ -174,11 +174,12 @@ fn set_glass(window: tauri::WebviewWindow, on: bool) {
             apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
         };
         if on {
-            // HudWindow = dark frosted material (matches the dark Clawd palette);
-            // keep it Active even when the non-activating panel isn't key.
+            // UnderWindowBackground — the most translucent material; reads better
+            // here than HudWindow (which washed the text out). Renders dark-frosted
+            // in a dark-appearance window. Keep it Active even when the panel isn't key.
             let _ = apply_vibrancy(
                 &window,
-                NSVisualEffectMaterial::HudWindow,
+                NSVisualEffectMaterial::UnderWindowBackground,
                 Some(NSVisualEffectState::Active),
                 Some(CARD_RADIUS),
             );
