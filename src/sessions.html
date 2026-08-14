@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Usage — Sessions</title>
+    <link rel="stylesheet" href="sessions.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <h1 class="title">Sessions</h1>
+
+      <div class="seg" id="windowSeg" role="tablist">
+        <button class="seg-btn active" data-window="current">Current 5h</button>
+        <button class="seg-btn" data-window="weekly">Weekly</button>
+        <button class="seg-btn" data-window="month">This month</button>
+        <button class="seg-btn" data-window="all">All time</button>
+      </div>
+
+      <input id="search" class="search" type="search" placeholder="Filter projects…" />
+
+      <span id="windowLabel" class="window-label">—</span>
+      <button id="refreshBtn" class="ghost-btn" title="rescan">↻</button>
+    </header>
+
+    <main id="content" class="content" data-state="loading">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th class="c-name">Project</th>
+            <th class="c-num" data-sort="allocated" title="Your subscription, split by each project's share of this window">
+              Share of plan
+            </th>
+            <th class="c-num muted" data-sort="cost" title="What these tokens would have cost at public API prices. Estimate — not an amount anyone charged you.">
+              ~API-equiv
+            </th>
+            <th class="c-num" data-sort="output">Output</th>
+            <th class="c-num" data-sort="input">Input</th>
+            <th class="c-num" data-sort="cacheWrite">Cache&nbsp;w</th>
+            <th class="c-num" data-sort="cacheRead">Cache&nbsp;r</th>
+            <th class="c-num" data-sort="requests">Req</th>
+            <th class="c-num" data-sort="active">Active</th>
+            <th class="c-num" data-sort="sessions">Sess</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+        <tfoot>
+          <tr id="totalRow" class="total">
+            <td class="c-name">Total</td>
+            <td class="c-num" id="tAllocated">—</td>
+            <td class="c-num muted" id="tCost">—</td>
+            <td class="c-num" id="tOutput">—</td>
+            <td class="c-num" id="tInput">—</td>
+            <td class="c-num" id="tCacheWrite">—</td>
+            <td class="c-num" id="tCacheRead">—</td>
+            <td class="c-num" id="tRequests">—</td>
+            <td class="c-num" id="tActive">—</td>
+            <td class="c-num" id="tSessions">—</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div class="overlay overlay-loading">
+        <span class="spinner"></span>
+        <span class="overlay-text">Reading transcripts…</span>
+      </div>
+      <div class="overlay overlay-empty">
+        <span class="overlay-text">No Claude Code activity in this window.</span>
+      </div>
+      <div class="overlay overlay-error">
+        <span class="err-title">couldn't read the transcripts</span>
+        <span id="errMsg" class="overlay-text"></span>
+      </div>
+    </main>
+
+    <!-- Part of the table on purpose: it must survive a screenshot or an export. -->
+    <footer class="notes">
+      <p>
+        <strong>Share of plan</strong> splits your
+        <span id="planPrice">—</span> subscription by each project's share of this
+        window's <span id="basisLabel">output tokens</span>. It is an allocation of a
+        real invoice — not a per-project charge.
+        <strong class="muted">~API-equiv</strong> simulates public API pricing and is an
+        estimate; nobody billed it.
+      </p>
+      <p class="dim">
+        Counted on this Mac only: <span id="scanNote">—</span>. Usage from claude.ai, the
+        Claude apps, or another machine on this account isn't included, and the account's
+        5h/weekly limit percentages can't be split per project.
+      </p>
+    </footer>
+
+    <script type="module" src="/sessions.js"></script>
+  </body>
+</html>

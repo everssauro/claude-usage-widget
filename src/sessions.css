@@ -1,0 +1,298 @@
+/* Session breakdown window. Same design language as the widget (same tokens,
+   same type), but this is a NORMAL window: opaque, scrollable, selectable. */
+
+@font-face {
+  font-family: "Tiempos";
+  src: url("/assets/fonts/TiemposText-400-Regular.otf") format("opentype");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "StyreneB";
+  src: url("/assets/fonts/StyreneB-Regular.otf") format("opentype");
+  font-weight: 400;
+}
+
+:root {
+  --bg: #0a0a0c;
+  --panel: #17181a;
+  --fg: #f3f3f1;
+  --dim: #86877f;
+  --pill-bg: #26272b;
+  --track: #2a2b2e;
+  --accent: #d2693f;
+  --row-hover: #141517;
+
+  font-family: "StyreneB", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: var(--fg);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #f4f2ec;
+  --panel: #ffffff;
+  --fg: #29281f;
+  --dim: #76746a;
+  --pill-bg: #ebe8df;
+  --track: #e4e1d6;
+  --accent: #bf5d3a;
+  --row-hover: #eceadf;
+  color-scheme: light;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+}
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- top bar ---- */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--track);
+  flex: none;
+}
+.title {
+  font-family: "Tiempos", Georgia, serif;
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1;
+}
+.seg {
+  display: flex;
+  background: var(--track);
+  border-radius: 8px;
+  padding: 2px;
+}
+.seg-btn {
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.seg-btn.active {
+  background: var(--panel);
+  color: var(--fg);
+}
+.search {
+  margin-left: auto;
+  width: 200px;
+  background: var(--panel);
+  border: 1px solid var(--track);
+  border-radius: 8px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+}
+.search:focus {
+  border-color: var(--accent);
+}
+.window-label {
+  font-size: 11.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.ghost-btn {
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.ghost-btn:hover {
+  color: var(--fg);
+  background: var(--track);
+}
+
+/* ---- table ---- */
+.content {
+  position: relative;
+  flex: 1;
+  overflow: auto;
+}
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  color: var(--dim);
+  font-weight: 400;
+  font-size: 11.5px;
+  text-align: right;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--track);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.grid thead th.c-name {
+  text-align: left;
+  cursor: default;
+}
+.grid thead th.sorted {
+  color: var(--fg);
+}
+.grid thead th.sorted::after {
+  content: " ↓";
+  color: var(--accent);
+}
+.grid td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+  text-align: right;
+  white-space: nowrap;
+}
+.grid td.c-name {
+  text-align: left;
+  width: 34%;
+  max-width: 0; /* let the ellipsis work inside a table cell */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grid tbody tr:hover {
+  background: var(--row-hover);
+}
+/* estimated values read differently from measured ones — muted + a tilde */
+.muted {
+  color: var(--dim);
+}
+
+/* project row */
+.p-row .name-cell {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.twisty {
+  color: var(--dim);
+  font-size: 10px;
+  width: 10px;
+  flex: none;
+}
+.p-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.p-path {
+  color: var(--dim);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.p-row {
+  cursor: pointer;
+}
+
+/* session row */
+.s-row td {
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.s-row .c-name {
+  padding-left: 34px;
+}
+.s-title {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+}
+.s-sub {
+  color: var(--dim);
+  font-size: 10.5px;
+}
+
+.total td {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--track);
+  border-bottom: none;
+  padding: 10px 12px;
+}
+
+/* ---- overlays ---- */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--bg);
+}
+.content[data-state="loading"] .overlay-loading,
+.content[data-state="empty"] .overlay-empty,
+.content[data-state="error"] .overlay-error {
+  display: flex;
+}
+.overlay-text {
+  font-size: 12.5px;
+  color: var(--dim);
+  max-width: 60%;
+  text-align: center;
+  line-height: 1.45;
+}
+.err-title {
+  color: var(--accent);
+  font-size: 14px;
+}
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--track);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- footer notes (part of the artefact, not chrome) ---- */
+.notes {
+  flex: none;
+  padding: 10px 18px 13px;
+  border-top: 1px solid var(--track);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg);
+}
+.notes .dim {
+  color: var(--dim);
+  margin-top: 3px;
+}
+.notes strong {
+  font-weight: 400;
+  color: var(--accent);
+}
+.notes strong.muted {
+  color: var(--dim);
+}

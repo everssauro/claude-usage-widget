@@ -41,8 +41,16 @@ pub struct Usage {
     /// Weekly (7d) utilization, 0–100.
     pub weekly_pct: i64,
     pub weekly_reset_min: i64,
-    /// e.g. "allowed", "allowed_warning", "rejected", "unknown".
+    /// e.g. "allowed", "allowed_warning", "rejected", "unknown". 5h window.
     pub status: String,
+    /// Same, for the WEEKLY window. Without this a weekly lockout — the
+    /// multi-day block this widget exists to warn about — could never trigger
+    /// the blocked takeover, because only the 5h status was ever read.
+    pub weekly_status: String,
+    /// Anthropic's own answer to "which limit is binding": "five_hour" |
+    /// "seven_day" (and possibly others). Beats our max() guess when present;
+    /// empty when the header is absent, and the frontend falls back.
+    pub representative: String,
 }
 
 /// Pure: turn a header lookup + a reference time into the view model.
@@ -78,6 +86,10 @@ where
         weekly_reset_min: reset_min("anthropic-ratelimit-unified-7d-reset"),
         status: get("anthropic-ratelimit-unified-5h-status")
             .unwrap_or_else(|| "unknown".to_string()),
+        weekly_status: get("anthropic-ratelimit-unified-7d-status")
+            .unwrap_or_else(|| "unknown".to_string()),
+        representative: get("anthropic-ratelimit-unified-representative-claim")
+            .unwrap_or_default(),
     }
 }
 
@@ -562,6 +574,31 @@ mod tests {
         assert_eq!(u.current_reset_min, 142); // 8520 / 60
         assert_eq!(u.weekly_pct, 4);
         assert_eq!(u.status, "allowed");
+    }
+
+    #[test]
+    fn parses_weekly_status_and_representative_claim() {
+        // A weekly lockout must be visible: reading only the 5h status made the
+        // multi-day block the one state the widget could not show.
+        let map = HashMap::from([
+            ("anthropic-ratelimit-unified-5h-status", "allowed"),
+            ("anthropic-ratelimit-unified-7d-status", "rejected"),
+            (
+                "anthropic-ratelimit-unified-representative-claim",
+                "seven_day",
+            ),
+        ]);
+        let u = parse_rate_limit(getter(map), 0.0);
+        assert_eq!(u.status, "allowed");
+        assert_eq!(u.weekly_status, "rejected");
+        assert_eq!(u.representative, "seven_day");
+    }
+
+    #[test]
+    fn absent_weekly_headers_degrade_not_break() {
+        let u = parse_rate_limit(|_| None, 0.0);
+        assert_eq!(u.weekly_status, "unknown");
+        assert_eq!(u.representative, ""); // frontend falls back to its own heuristic
     }
 
     #[test]

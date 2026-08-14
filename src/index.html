@@ -7,14 +7,15 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <!-- Whole card drags (deep); <button>s block drag naturally; the mascot
-         canvas opts out with ="false" so its clicks fire. -->
+    <!-- Whole card drags via our own mousedown handler (see bindDrag in main.js)
+         instead of data-tauri-drag-region: Tauri's injected drag.js only drags
+         when e.detail is 1 or 2, so a rapid click burst kills dragging until you
+         pause. Interactive elements (button/input/canvas) are excluded there. -->
     <main
       id="card"
       class="card"
       data-state="loading"
       data-view="compact"
-      data-tauri-drag-region="deep"
     >
       <header class="head">
         <canvas
@@ -22,11 +23,10 @@
           class="mascot"
           width="20"
           height="20"
-          title="click: creature mode"
-          data-tauri-drag-region="false"
-        ></canvas>
+          title="click: creature mode"        ></canvas>
         <h1 class="title">Usage</h1>
         <span id="staleDot" class="stale-dot" title="showing last value"></span>
+        <button id="sessionsBtn" class="hbtn" title="usage by project">☰</button>
         <button id="settingsBtn" class="hbtn" title="settings">⚙</button>
         <button id="pinBtn" class="hbtn pin" title="pin on top">
           <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
@@ -122,7 +122,13 @@
         <span class="connect-title">Connect your Claude account</span>
         <span class="connect-sub">Claude Code logins are detected automatically. No Claude Code? Sign in directly:</span>
         <button id="connectStart" class="connect-btn">Sign in with Claude ↗</button>
-        <input id="codeInput" class="code-input" placeholder="paste the code here" hidden />
+        <!-- Paste button, not just ⌘V: this window is a non-activating panel, so
+             our app never becomes active and ⌘V is handled by whichever app owns
+             the menu bar. The button reads the clipboard directly. -->
+        <div id="codeRow" class="code-row" hidden>
+          <input id="codeInput" class="code-input" placeholder="paste the code here" />
+          <button id="pasteBtn" class="paste-btn" title="paste from clipboard">Paste</button>
+        </div>
         <button id="codeSubmit" class="connect-btn" hidden>Connect</button>
         <span id="connectHint" class="connect-hint"></span>
         <button id="connectBack" class="hbtn back" title="back">↩</button>
@@ -135,9 +141,7 @@
           class="mascot-big"
           width="20"
           height="20"
-          title="click to change figure"
-          data-tauri-drag-region="false"
-        ></canvas>
+          title="click to change figure"        ></canvas>
         <span class="creature-hint">click to change</span>
         <button id="creatureBack" class="hbtn back" title="back">↩</button>
       </div>

@@ -118,11 +118,12 @@ const el = {};
 function cache() {
   for (const id of [
     "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
-    "settingsBtn", "themeSeg", "planSeg", "notifToggle", "glassToggle", "sSub", "sBlock", "sMonth", "sValue",
+    "settingsBtn", "sessionsBtn", "themeSeg", "planSeg", "notifToggle", "glassToggle", "sSub", "sBlock", "sMonth", "sValue",
     "curMeter", "curPct", "curBar", "curReset", "curTrend",
     "wkMeter", "wkPct", "wkBar", "wkReset",
     "statusText", "errMsg", "dEta", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
-    "connectBtn", "connectStart", "codeInput", "codeSubmit", "connectHint", "connectBack",
+    "connectBtn", "connectStart", "codeRow", "codeInput", "pasteBtn", "codeSubmit",
+    "connectHint", "connectBack",
     "accountBtn",
   ]) {
     el[id] = document.getElementById(id);
@@ -370,11 +371,31 @@ async function refreshAuthRow() {
 
 async function startConnect() {
   setView("connect");
-  el.codeInput.hidden = false;
+  el.codeRow.hidden = false;
   el.codeSubmit.hidden = false;
-  el.connectHint.textContent = "Opening browser… approve, copy the code, paste it above.";
+  el.connectHint.textContent = "Opening browser… approve, copy the code, then hit Paste.";
+  // A non-activating panel has no keyboard focus by default — without this the
+  // field can be clicked but not typed into.
+  invoke("focus_for_input").catch(() => {});
   try {
     await invoke("start_login");
+  } catch (e) {
+    el.connectHint.textContent = String(e);
+  }
+}
+
+// Read the clipboard through Rust (NSPasteboard). ⌘V can't be relied on here:
+// the widget never becomes the active app, so the menu bar — and with it the
+// paste key equivalent — belongs to another app.
+async function pasteCode() {
+  try {
+    const text = (await invoke("read_clipboard")).trim();
+    if (!text) {
+      el.connectHint.textContent = "Clipboard is empty — copy the code first.";
+      return;
+    }
+    el.codeInput.value = text;
+    el.connectHint.textContent = "Code pasted — hit Connect.";
   } catch (e) {
     el.connectHint.textContent = String(e);
   }
@@ -511,16 +532,32 @@ function estimateBurn(currentPct) {
 // Either limit blocks all prompts, so the BINDING window is whichever is nearer
 // its cap. 5h is volatile and usually maxes first; weekly is the painful
 // multi-day lockout people get blindsided by.
-const bindingOf = (u) => (u.weekly_pct > u.current_pct ? "weekly" : "current");
+// Anthropic states the answer outright in `representative-claim` — prefer it,
+// and keep the max() heuristic for when the (undocumented) header is absent.
+const bindingOf = (u) => {
+  if (u.representative === "seven_day") return "weekly";
+  if (u.representative === "five_hour") return "current";
+  return u.weekly_pct > u.current_pct ? "weekly" : "current";
+};
 
 // "rejected" (over/throttled) | "risk" (5h will hit before reset) | "warning" | "ok"
 function riskState(u, etaMin) {
-  if (u.current_pct >= 100 || u.weekly_pct >= 100 || u.status === "rejected")
+  if (
+    u.current_pct >= 100 ||
+    u.weekly_pct >= 100 ||
+    u.status === "rejected" ||
+    u.weekly_status === "rejected" // a weekly lockout blocks everything too
+  )
     return "rejected";
   if (etaMin != null && etaMin < u.current_reset_min) return "risk";
   // Visuals (bar/footer/border) flip together at the warn zone; the louder
   // push notifications live at 80/90/95.
-  if (u.status === "allowed_warning" || u.current_pct >= WARN_PCT || u.weekly_pct >= WARN_PCT)
+  if (
+    u.status === "allowed_warning" ||
+    u.weekly_status === "allowed_warning" ||
+    u.current_pct >= WARN_PCT ||
+    u.weekly_pct >= WARN_PCT
+  )
     return "warning";
   return "ok";
 }
@@ -596,7 +633,9 @@ function renderTrend(ratePerHour) {
 // binding window. Whimsy only when genuinely OK (the Clawdmeter charm).
 function statusLine(u, binding) {
   if (lastRisk === "rejected")
-    return u.weekly_pct >= 100 ? "weekly limit reached" : "limit reached";
+    return u.weekly_pct >= 100 || u.weekly_status === "rejected"
+      ? "weekly limit reached"
+      : "limit reached";
   if (lastRisk === "risk") return `limit in ${fmtDur(lastEtaMin)}`;
   if (lastRisk === "warning")
     return binding === "weekly" ? `weekly ${u.weekly_pct}% — heads up` : "approaching limit";
@@ -689,10 +728,36 @@ function render(data) {
   }
 }
 
+// Poll loop — self-healing: a throw anywhere in refresh()/render() must never
+// stop the schedule, or the card silently freezes on its last frame forever.
 async function pollLoop() {
-  await refresh();
-  const delay = flatCount >= FLAT_SAMPLES_TO_SLOW ? POLL_SLOW_MS : POLL_MS;
-  setTimeout(pollLoop, delay);
+  try {
+    await refresh();
+  } catch (e) {
+    console.error("poll failed", e);
+  } finally {
+    setTimeout(pollLoop, flatCount >= FLAT_SAMPLES_TO_SLOW ? POLL_SLOW_MS : POLL_MS);
+  }
+}
+
+// Window drag. We do NOT use `data-tauri-drag-region`: Tauri's injected drag.js
+// only starts a drag when `e.detail` (the click-chain counter) is 1 or 2, so a
+// rapid click burst — exactly what a swallowed first click trains you to do —
+// leaves every later mousedown at detail>=3 and dragging dies until you pause
+// ~500ms. It also early-returns on the 2nd click of a double-click on macOS.
+// This handler has no such gate; interactive elements opt out by tag.
+function bindDrag() {
+  el.card.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest("button, input, canvas, .switch")) return;
+    e.preventDefault();
+    // Via Rust (not getCurrentWindow().startDragging()) so the backend knows the
+    // moves that follow are USER moves — that's how it tells a real drag apart
+    // from macOS relocating the widget when a display sleeps or is unplugged.
+    invoke("start_drag").catch(() => {
+      /* headless */
+    });
+  });
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -709,6 +774,9 @@ window.addEventListener("DOMContentLoaded", () => {
   el.settingsBtn.addEventListener("click", () =>
     setView(view === "settings" ? "compact" : "settings"),
   );
+  // Opens a separate, normal window — a table needs scrolling and selection,
+  // which a 280px non-activating panel can't give.
+  el.sessionsBtn.addEventListener("click", () => invoke("open_sessions").catch(() => {}));
   el.creatureBack.addEventListener("click", () => setView(baseBeforeCreature));
   el.closeBtn.addEventListener("click", closeApp);
   el.pinBtn.addEventListener("click", () => applyPinned(!pinned));
@@ -720,7 +788,10 @@ window.addEventListener("DOMContentLoaded", () => {
   el.connectBtn.addEventListener("click", startConnect); // from the error overlay
   el.connectStart.addEventListener("click", startConnect); // re-open browser
   el.codeSubmit.addEventListener("click", submitCode);
+  el.pasteBtn.addEventListener("click", pasteCode);
   el.codeInput.addEventListener("keydown", (e) => e.key === "Enter" && submitCode());
+  // Clicking the field is also a request for keyboard focus (see focus_for_input).
+  el.codeInput.addEventListener("mousedown", () => invoke("focus_for_input").catch(() => {}));
   el.connectBack.addEventListener("click", () => setView("compact"));
   el.accountBtn.addEventListener("click", async () => {
     if (authState === "own") {
@@ -732,11 +803,16 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  bindDrag();
+
   applyPinned(pref.getBool("cuw-pinned")); // default on
   applyTheme(localStorage.getItem("cuw-theme") || "dark");
   applyNotif(pref.getBool("cuw-notif"));
   applyGlass(localStorage.getItem("cuw-glass") === "1"); // default off
-  planManual = localStorage.getItem("cuw-plan"); // null until the user picks
+  // Validate the persisted plan — an unknown key would throw in renderSettings
+  // (PLANS[plan].price) and take the whole init path (incl. pollLoop) with it.
+  const storedPlan = localStorage.getItem("cuw-plan");
+  planManual = PLANS[storedPlan] ? storedPlan : null;
   renderSettings();
 
   pollLoop();

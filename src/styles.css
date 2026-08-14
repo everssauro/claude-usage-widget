@@ -95,9 +95,13 @@ body {
 .card[data-stale="true"] .stale-dot {
   opacity: 1;
 }
-/* stale = dim the whole card, not just the dot */
+/* stale = dim the whole card, not just the dot.
+   Uses `filter`, NOT `opacity`: the NSWindow is transparent, so fractional
+   opacity on the full-bleed card doesn't dim it against an opaque backdrop —
+   it makes the real desktop show through, which reads as "the widget went
+   see-through". `filter` changes rendered RGB, not alpha. */
 .card[data-stale="true"] {
-  opacity: 0.74;
+  filter: brightness(0.72) saturate(0.85);
 }
 /* throttle / risk states (driven by the rate-limit status + ETA) */
 .card[data-status="warning"] {
@@ -132,9 +136,14 @@ body {
   opacity: 0;
   color: var(--accent);
   transition: opacity 0.2s;
+  /* Must not hit-test while invisible. With acceptFirstMouse on, a click that
+     merely brings the widget forward would otherwise land on an unseen ✕ and
+     quit the app. Only clickable once hover has actually revealed it. */
+  pointer-events: none;
 }
 .card:hover .hbtn.close {
   opacity: 1;
+  pointer-events: auto;
 }
 .hbtn.pin {
   display: flex;
@@ -445,8 +454,31 @@ body {
 .connect-btn:hover {
   filter: brightness(1.1);
 }
-.code-input {
+.code-row {
+  display: flex;
+  gap: 6px;
   width: 92%;
+  align-items: center;
+}
+.code-row[hidden] {
+  display: none;
+}
+.paste-btn {
+  flex: none;
+  background: var(--pill-bg);
+  color: var(--fg);
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.paste-btn:hover {
+  filter: brightness(1.15);
+}
+.code-input {
+  flex: 1;
+  min-width: 0;
   background: var(--panel);
   border: 1px solid var(--track);
   border-radius: 8px;
@@ -543,6 +575,23 @@ body {
   gap: 8px;
   border-radius: 18px;
   background: var(--card-bg);
+  /* The veil must never hit-test: with glass on, --card-bg is ~5% alpha, so an
+     overlay left up during loading/error is invisible but still eats every
+     click on the content below it. Only its own button stays interactive. */
+  pointer-events: none;
+}
+.overlay .connect-btn {
+  pointer-events: auto;
+}
+/* Never let a state overlay cover a view that owns its own exit control
+   (creature hides the header, so #creatureBack is the ONLY way out). */
+.card[data-view="creature"] .overlay,
+.card[data-view="settings"] .overlay {
+  display: none;
+}
+/* An exit control can never be occluded. */
+.hbtn.back {
+  z-index: 4;
 }
 .card[data-state="loading"] .overlay-loading,
 .card[data-state="error"] .overlay-error {

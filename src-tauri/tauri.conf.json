@@ -20,7 +20,8 @@
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "shadow": false
+        "shadow": false,
+        "acceptFirstMouse": true
       }
     ],
     "security": {

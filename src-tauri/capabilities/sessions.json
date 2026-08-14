@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "sessions",
+  "description": "Capability for the session-breakdown window (a normal window, not the panel)",
+  "windows": ["sessions"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}
