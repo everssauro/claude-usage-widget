@@ -23,3 +23,6 @@ src-tauri/gen/
 
 # Playwright MCP scratch
 .playwright-mcp/
+
+# Session planning scratch
+tasks/
