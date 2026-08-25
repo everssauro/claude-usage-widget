@@ -522,6 +522,13 @@ async function load() {
     el.windowLabel.textContent = `${fmtClock(res.window_start)} → ${fmtClock(res.window_end)}`;
     el.planPrice.textContent = `$${plan}/mo`;
     el.scanNote.textContent = `${res.projects.length} projects, ${res.total_requests} requests, ${res.files_scanned} transcripts scanned`;
+    // A session open in a pane but idle spends nothing, so it isn't here. Say so:
+    // "where are my other sessions?" is otherwise a reasonable thing to conclude
+    // is a bug (measured: 17 sessions open, 6 with activity in the 5h window).
+    el.windowNote.textContent =
+      state.window === "all"
+        ? ""
+        : "Lists activity in this window — a session that's open but idle doesn't appear. Use All time to see every session.";
     render();
   } catch (e) {
     el.errMsg.textContent = String(e);
@@ -532,7 +539,7 @@ async function load() {
 window.addEventListener("DOMContentLoaded", () => {
   for (const id of [
     "content", "rows", "search", "windowSeg", "windowLabel", "refreshBtn", "errMsg",
-    "planPrice", "basisLabel", "scanNote",
+    "planPrice", "basisLabel", "scanNote", "windowNote",
     "tAllocated", "tCost", "tOutput", "tInput", "tCacheWrite", "tCacheRead",
     "tRequests", "tActive", "tSessions", "tFable", "newGroupBtn", "groupInput",
   ]) {
