@@ -504,6 +504,43 @@ fn scan(window_start: f64, window_end: f64) -> SessionsView {
     SessionsView::Active(summary)
 }
 
+// ---------------------------------------------------------------------------
+// Groups — user-named folders over projects/sessions ("SlimPass", "Ton", …).
+//
+// Stored as a plain JSON blob next to `window.json` rather than in the webview's
+// localStorage: this is the mapping that turns raw folders into who-owes-what,
+// so it must survive a reinstall, be backup-able, and be editable by hand.
+// The schema lives in the frontend; Rust only guarantees it is valid JSON and
+// that a failed write never truncates the previous mapping.
+// ---------------------------------------------------------------------------
+
+fn groups_file(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    Some(app.path().app_config_dir().ok()?.join("groups.json"))
+}
+
+/// Raw JSON blob, or an empty string when nothing has been saved yet.
+#[tauri::command]
+pub fn get_groups(app: tauri::AppHandle) -> String {
+    groups_file(&app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn save_groups(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    // Reject anything unparseable before it can replace a good mapping.
+    serde_json::from_str::<serde_json::Value>(&json).map_err(|e| format!("invalid groups: {e}"))?;
+    let path = groups_file(&app).ok_or("no config dir")?;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Write-then-rename so an interrupted write can't leave a half file.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 /// Tauri command: per-project/session usage inside an explicit window.
 ///
 /// The window is passed in (not guessed here) so it is always the SAME window

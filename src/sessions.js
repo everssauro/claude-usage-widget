@@ -48,12 +48,25 @@ const rateFor = (model) => {
 // Subscription price by plan, mirroring the widget's settings.
 const PLANS = { pro: 20, max5: 100, max20: 200 };
 
+// Models that spend usage CREDITS rather than the plan's windows. Anthropic is
+// explicit about this in the client: "Fable 5 is now using usage credits instead
+// of your plan limits". Keeping them out of the plan split matters for billing —
+// otherwise a client who used Fable inflates their share of a subscription their
+// Fable work never touched.
+const CREDIT_MODEL = /fable|mythos/i;
+const drawsCredits = (model) => CREDIT_MODEL.test(model || "");
+
+const UNGROUPED = "__ungrouped__";
+
 const el = {};
 const state = {
+  // { groups: [{id,name}], projects: {path: groupId} }
+  groups: { groups: [], projects: {} },
   window: "current",
   sort: "output",
   filter: "",
   expanded: new Set(),
+  collapsed: new Set(), // collapsed GROUP bands
   data: null,
 };
 
@@ -100,6 +113,7 @@ const SORTS = {
   requests: (p) => p.requests,
   active: (p) => p.active_min,
   sessions: (p) => p.sessions.length,
+  fable: (p) => p._fable,
   cost: (p) => p._cost,
   allocated: (p) => p._share,
 };
@@ -109,6 +123,193 @@ function td(text, cls) {
   c.className = cls || "c-num";
   c.textContent = text;
   return c;
+}
+
+function groupSelect(p) {
+  const sel = document.createElement("select");
+  sel.className = "group-select";
+  for (const g of state.groups.groups) {
+    const o = document.createElement("option");
+    o.value = g.id;
+    o.textContent = g.name;
+    sel.append(o);
+  }
+  const none = document.createElement("option");
+  none.value = UNGROUPED;
+  none.textContent = "—";
+  sel.append(none);
+  const nw = document.createElement("option");
+  nw.value = "__new__";
+  nw.textContent = "＋ New group…";
+  sel.append(nw);
+  sel.value = p._group;
+  // Clicks must not bubble into the row's expand/collapse handler.
+  sel.addEventListener("click", (e) => e.stopPropagation());
+  sel.addEventListener("change", (e) => {
+    e.stopPropagation();
+    if (sel.value === "__new__") {
+      const g = newGroup();
+      if (!g) return render();
+      return assignProject(p.path, g.id);
+    }
+    assignProject(p.path, sel.value);
+  });
+  return sel;
+}
+
+function projectRow(p) {
+  const tr = document.createElement("tr");
+  tr.className = "p-row";
+  const name = document.createElement("td");
+  name.className = "c-name";
+  const wrap = document.createElement("div");
+  wrap.className = "name-cell";
+  const tw = document.createElement("span");
+  tw.className = "twisty";
+  tw.textContent = state.expanded.has(p.path) ? "▾" : "▸";
+  const nm = document.createElement("span");
+  nm.className = "p-name";
+  nm.textContent = p.name;
+  const pa = document.createElement("span");
+  pa.className = "p-path";
+  pa.textContent = p.path;
+  wrap.append(tw, nm, pa);
+  name.append(wrap);
+
+  const gcell = document.createElement("td");
+  gcell.className = "c-group";
+  gcell.append(groupSelect(p));
+
+  tr.append(
+    name,
+    gcell,
+    td(fmtMoney(p._alloc)),
+    td("~" + fmtMoney(p._cost), "c-num muted"),
+    td(p._fable ? fmtBig(p._fable) : "—", "c-num credit"),
+    td(fmtBig(p.tokens.output)),
+    td(fmtBig(p.tokens.input)),
+    td(fmtBig(p.tokens.cache_write)),
+    td(fmtBig(p.tokens.cache_read)),
+    td(String(p.requests)),
+    td(fmtMin(p.active_min)),
+    td(String(p.sessions.length)),
+  );
+  tr.addEventListener("click", () => {
+    try {
+      state.expanded.has(p.path) ? state.expanded.delete(p.path) : state.expanded.add(p.path);
+      render();
+    } catch (err) {
+      // Never fail silently: a dead row with no explanation is unfixable from
+      // the outside (this window has no devtools in a release build).
+      el.errMsg.textContent = `row click: ${err}`;
+      el.content.dataset.state = "error";
+    }
+  });
+  return tr;
+}
+
+function sessionRow(s) {
+  const sr = document.createElement("tr");
+  sr.className = "s-row";
+  const sname = document.createElement("td");
+  sname.className = "c-name";
+  const t = document.createElement("span");
+  t.className = "s-title";
+  t.textContent = s.title || s.session_id.slice(0, 8);
+  const sub = document.createElement("span");
+  sub.className = "s-sub";
+  sub.textContent =
+    ` · ${fmtClock(s.last_ts)}` +
+    (s.subagent_requests ? ` · +${s.subagent_requests} subagent` : "");
+  sname.append(t, sub);
+  sr.append(
+    sname,
+    td("", "c-group"),
+    td(""),
+    td(""),
+    td(""),
+    td(fmtBig(s.tokens.output)),
+    td(fmtBig(s.tokens.input)),
+    td(fmtBig(s.tokens.cache_write)),
+    td(fmtBig(s.tokens.cache_read)),
+    td(String(s.requests)),
+    td(fmtMin(s.active_min)),
+    td(""),
+  );
+  return sr;
+}
+
+/// A group's own row: the number you read when asking "what did SlimPass cost
+/// me this month". Totals SUM across projects; active time is deliberately NOT
+/// summed here (concurrent projects would report more hours than elapsed) —
+/// only the grand total unions, so per-group time is left blank rather than
+/// printed wrong.
+function groupRow(id, members, collapsed) {
+  const tr = document.createElement("tr");
+  tr.className = "g-row";
+  tr.dataset.group = id;
+  const sum = (f) => members.reduce((a, p) => a + f(p), 0);
+
+  const name = document.createElement("td");
+  name.className = "c-name";
+  const wrap = document.createElement("div");
+  wrap.className = "name-cell";
+  const tw = document.createElement("span");
+  tw.className = "twisty";
+  tw.textContent = collapsed ? "▸" : "▾";
+  const nm = document.createElement("span");
+  nm.className = "g-name";
+  nm.textContent = groupName(id);
+  const cnt = document.createElement("span");
+  cnt.className = "p-path";
+  cnt.textContent = `${members.length} project${members.length === 1 ? "" : "s"}`;
+  wrap.append(tw, nm, cnt);
+  name.append(wrap);
+
+  const gcell = document.createElement("td");
+  gcell.className = "c-group";
+  if (id !== UNGROUPED) {
+    const ren = document.createElement("button");
+    ren.className = "mini-btn";
+    ren.textContent = "rename";
+    ren.title = "rename or delete this group";
+    ren.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const next = prompt("Group name (empty deletes it)", groupName(id));
+      if (next === null) return;
+      if (!next.trim()) {
+        state.groups.groups = state.groups.groups.filter((g) => g.id !== id);
+        for (const [path, gid] of Object.entries(state.groups.projects))
+          if (gid === id) delete state.groups.projects[path];
+      } else {
+        const g = state.groups.groups.find((x) => x.id === id);
+        if (g) g.name = next.trim();
+      }
+      saveGroups();
+      render();
+    });
+    gcell.append(ren);
+  }
+
+  tr.append(
+    name,
+    gcell,
+    td(fmtMoney(sum((p) => p._alloc))),
+    td("~" + fmtMoney(sum((p) => p._cost)), "c-num muted"),
+    td(sum((p) => p._fable) ? fmtBig(sum((p) => p._fable)) : "—", "c-num credit"),
+    td(fmtBig(sum((p) => p.tokens.output))),
+    td(fmtBig(sum((p) => p.tokens.input))),
+    td(fmtBig(sum((p) => p.tokens.cache_write))),
+    td(fmtBig(sum((p) => p.tokens.cache_read))),
+    td(String(sum((p) => p.requests))),
+    td("—"),
+    td(String(sum((p) => p.sessions.length))),
+  );
+  tr.addEventListener("click", () => {
+    state.collapsed.has(id) ? state.collapsed.delete(id) : state.collapsed.add(id);
+    render();
+  });
+  return tr;
 }
 
 function render() {
@@ -122,78 +323,30 @@ function render() {
   const key = SORTS[state.sort] || SORTS.output;
   projects.sort((a, b) => key(b) - key(a));
 
-  el.rows.replaceChildren();
+  // Bucket by group. Ungrouped always sits last: it's the inbox, not a client.
+  const buckets = new Map();
   for (const p of projects) {
-    const tr = document.createElement("tr");
-    tr.className = "p-row";
-    const name = document.createElement("td");
-    name.className = "c-name";
-    const wrap = document.createElement("div");
-    wrap.className = "name-cell";
-    const tw = document.createElement("span");
-    tw.className = "twisty";
-    tw.textContent = state.expanded.has(p.path) ? "▾" : "▸";
-    const nm = document.createElement("span");
-    nm.className = "p-name";
-    nm.textContent = p.name;
-    const pa = document.createElement("span");
-    pa.className = "p-path";
-    pa.textContent = p.path;
-    wrap.append(tw, nm, pa);
-    name.append(wrap);
-    tr.append(
-      name,
-      td(fmtMoney(p._alloc)),
-      td("~" + fmtMoney(p._cost), "c-num muted"),
-      td(fmtBig(p.tokens.output)),
-      td(fmtBig(p.tokens.input)),
-      td(fmtBig(p.tokens.cache_write)),
-      td(fmtBig(p.tokens.cache_read)),
-      td(String(p.requests)),
-      td(fmtMin(p.active_min)),
-      td(String(p.sessions.length)),
-    );
-    tr.addEventListener("click", () => {
-      try {
-        state.expanded.has(p.path) ? state.expanded.delete(p.path) : state.expanded.add(p.path);
-        render();
-      } catch (err) {
-        // Never fail silently: a dead row with no explanation is unfixable
-        // from the outside (this window has no devtools in a release build).
-        el.errMsg.textContent = `row click: ${err}`;
-        el.content.dataset.state = "error";
-      }
-    });
-    el.rows.append(tr);
+    if (!buckets.has(p._group)) buckets.set(p._group, []);
+    buckets.get(p._group).push(p);
+  }
+  const order = state.groups.groups
+    .map((g) => g.id)
+    .filter((id) => buckets.has(id))
+    .concat(buckets.has(UNGROUPED) ? [UNGROUPED] : []);
 
-    if (!state.expanded.has(p.path)) continue;
-    for (const s of p.sessions) {
-      const sr = document.createElement("tr");
-      sr.className = "s-row";
-      const sname = document.createElement("td");
-      sname.className = "c-name";
-      const t = document.createElement("span");
-      t.className = "s-title";
-      t.textContent = s.title || s.session_id.slice(0, 8);
-      const sub = document.createElement("span");
-      sub.className = "s-sub";
-      sub.textContent =
-        ` · ${fmtClock(s.last_ts)}` +
-        (s.subagent_requests ? ` · +${s.subagent_requests} subagent` : "");
-      sname.append(t, sub);
-      sr.append(
-        sname,
-        td(""),
-        td(""),
-        td(fmtBig(s.tokens.output)),
-        td(fmtBig(s.tokens.input)),
-        td(fmtBig(s.tokens.cache_write)),
-        td(fmtBig(s.tokens.cache_read)),
-        td(String(s.requests)),
-        td(fmtMin(s.active_min)),
-        td(""),
-      );
-      el.rows.append(sr);
+  el.rows.replaceChildren();
+  const anyGroups = state.groups.groups.length > 0;
+  for (const id of order) {
+    const members = buckets.get(id);
+    const collapsed = state.collapsed.has(id);
+    // With no groups defined at all, skip the header entirely — a single
+    // "Ungrouped" band over every row is noise.
+    if (anyGroups) el.rows.append(groupRow(id, members, collapsed));
+    if (anyGroups && collapsed) continue;
+    for (const p of members) {
+      el.rows.append(projectRow(p));
+      if (!state.expanded.has(p.path)) continue;
+      for (const s of p.sessions) el.rows.append(sessionRow(s));
     }
   }
 
@@ -201,6 +354,7 @@ function render() {
   const sum = (f) => projects.reduce((a, p) => a + f(p), 0);
   el.tAllocated.textContent = fmtMoney(sum((p) => p._alloc));
   el.tCost.textContent = "~" + fmtMoney(sum((p) => p._cost));
+  el.tFable.textContent = sum((p) => p._fable) ? fmtBig(sum((p) => p._fable)) : "—";
   el.tOutput.textContent = fmtBig(sum((p) => p.tokens.output));
   el.tInput.textContent = fmtBig(sum((p) => p.tokens.input));
   el.tCacheWrite.textContent = fmtBig(sum((p) => p.tokens.cache_write));
@@ -215,6 +369,51 @@ function render() {
     th.classList.toggle("sorted", th.dataset.sort === state.sort);
 
   el.content.dataset.state = d.projects.length ? "ok" : "empty";
+}
+
+// ---------------------------------------------------------------------------
+// Groups — user-named folders ("SlimPass", "Ton", "Saggezza") over projects.
+// Assignment is at PROJECT level on purpose: sessions are numerous and
+// ephemeral, projects are few and stable, and every session of a project
+// inherits its folder. Persisted to disk (groups.json) via Rust, not
+// localStorage — this mapping is what turns folders into who-owes-what.
+// ---------------------------------------------------------------------------
+async function loadGroups() {
+  try {
+    const raw = await invoke("get_groups");
+    if (raw) {
+      const g = JSON.parse(raw);
+      state.groups = { groups: g.groups || [], projects: g.projects || {} };
+    }
+  } catch {
+    /* first run, or unreadable — start empty rather than block the table */
+  }
+}
+async function saveGroups() {
+  try {
+    await invoke("save_groups", { json: JSON.stringify(state.groups) });
+  } catch (e) {
+    el.errMsg.textContent = `couldn't save groups: ${e}`;
+    el.content.dataset.state = "error";
+  }
+}
+const groupName = (id) =>
+  (state.groups.groups.find((g) => g.id === id) || {}).name || "Ungrouped";
+
+function newGroup(preset) {
+  const name = (preset ?? prompt("Group name (e.g. SlimPass, Ton, Saggezza)"))?.trim();
+  if (!name) return null;
+  const g = { id: `g${Date.now().toString(36)}`, name };
+  state.groups.groups.push(g);
+  saveGroups();
+  return g;
+}
+
+function assignProject(path, groupId) {
+  if (groupId === UNGROUPED) delete state.groups.projects[path];
+  else state.groups.projects[path] = groupId;
+  saveGroups();
+  render();
 }
 
 async function load() {
@@ -236,8 +435,8 @@ async function load() {
     // Derived, per-project: estimated $ and the share used for the allocation.
     // Share is by OUTPUT tokens on purpose: cache reads are ~97% of all tokens,
     // so "total tokens" mostly measures conversation length, not work done.
+    // Fable is excluded — see CREDIT_MODEL.
     const plan = PLANS[localStorage.getItem("cuw-plan")] ?? PLANS.max20;
-    const totalOut = res.projects.reduce((a, p) => a + p.tokens.output, 0) || 1;
     // How much of a real invoice this window represents. For "This month" it is
     // the whole invoice — allocating all of it by share-so-far answers "if the
     // month ended now, what would each client's slice be?", which is the actual
@@ -245,10 +444,18 @@ async function load() {
     const windowSecs = res.window_end - res.window_start;
     const invoiceFraction =
       state.window === "month" ? 1 : windowSecs / (30 * 86400);
+    // Plan share counts only models that actually consume the plan windows.
+    const planOut = (p) =>
+      (p.models || []).reduce((a, m) => a + (drawsCredits(m.model) ? 0 : m.tokens.output), 0);
+    const fableOut = (p) =>
+      (p.models || []).reduce((a, m) => a + (drawsCredits(m.model) ? m.tokens.output : 0), 0);
+    const totalPlanOut = res.projects.reduce((a, p) => a + planOut(p), 0) || 1;
     for (const p of res.projects) {
       p._cost = estCost(p.models);
-      p._share = p.tokens.output / totalOut;
+      p._fable = fableOut(p);
+      p._share = planOut(p) / totalPlanOut;
       p._alloc = plan * invoiceFraction * p._share;
+      p._group = state.groups.projects[p.path] || UNGROUPED;
     }
     state.data = res;
 
@@ -267,7 +474,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "content", "rows", "search", "windowSeg", "windowLabel", "refreshBtn", "errMsg",
     "planPrice", "basisLabel", "scanNote",
     "tAllocated", "tCost", "tOutput", "tInput", "tCacheWrite", "tCacheRead",
-    "tRequests", "tActive", "tSessions",
+    "tRequests", "tActive", "tSessions", "tFable", "newGroupBtn",
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -287,6 +494,9 @@ window.addEventListener("DOMContentLoaded", () => {
     render();
   });
   el.refreshBtn.addEventListener("click", load);
+  el.newGroupBtn.addEventListener("click", () => {
+    if (newGroup()) render();
+  });
   // Any uncaught error would otherwise leave the table looking merely inert.
   window.addEventListener("error", (e) => {
     el.errMsg.textContent = `${e.message} (${e.filename}:${e.lineno})`;
@@ -299,5 +509,5 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  load();
+  loadGroups().then(load);
 });

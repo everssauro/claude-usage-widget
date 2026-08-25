@@ -296,3 +296,70 @@ body {
 .notes strong.muted {
   color: var(--dim);
 }
+
+/* ---- groups (user-named folders: SlimPass, Ton, Saggezza…) ---- */
+.c-group {
+  width: 132px;
+  text-align: left !important;
+}
+.group-select {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--track);
+  border-radius: 6px;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.group-select:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* A group band is the row you read for "what did this client cost me". */
+.g-row {
+  cursor: pointer;
+}
+.g-row td {
+  background: var(--panel);
+  border-top: 1px solid var(--track);
+  border-bottom: 1px solid var(--track);
+  font-size: 12.5px;
+}
+.g-name {
+  font-family: "Tiempos", Georgia, serif;
+  font-size: 15px;
+}
+.g-row .p-path {
+  font-size: 10.5px;
+}
+/* projects sit visually inside their band */
+.g-row + .p-row .c-name,
+.p-row .c-name {
+  padding-left: 18px;
+}
+.g-row .c-name {
+  padding-left: 12px;
+}
+
+.mini-btn {
+  background: none;
+  border: 1px solid var(--track);
+  border-radius: 6px;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.mini-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* Fable spends credits, not the plan — visually distinct from plan columns. */
+.credit {
+  color: var(--accent);
+}

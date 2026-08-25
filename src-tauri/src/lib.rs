@@ -625,6 +625,8 @@ pub fn run() {
             usage::get_cost,
             usage::get_month_cost,
             sessions::get_sessions,
+            sessions::get_groups,
+            sessions::save_groups,
             open_sessions,
             set_pinned,
             set_glass,

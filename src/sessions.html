@@ -20,6 +20,7 @@
       <input id="search" class="search" type="search" placeholder="Filter projects…" />
 
       <span id="windowLabel" class="window-label">—</span>
+      <button id="newGroupBtn" class="ghost-btn" title="new group">＋ Group</button>
       <button id="refreshBtn" class="ghost-btn" title="rescan">↻</button>
     </header>
 
@@ -28,12 +29,14 @@
         <thead>
           <tr>
             <th class="c-name">Project</th>
+            <th class="c-group">Group</th>
             <th class="c-num" data-sort="allocated" title="Your subscription, split by each project's share of this window">
               Share of plan
             </th>
             <th class="c-num muted" data-sort="cost" title="What these tokens would have cost at public API prices. Estimate — not an amount anyone charged you.">
               ~API-equiv
             </th>
+            <th class="c-num" data-sort="fable" title="Fable draws on usage credits, not on your plan — so it is kept out of the plan allocation.">Fable</th>
             <th class="c-num" data-sort="output">Output</th>
             <th class="c-num" data-sort="input">Input</th>
             <th class="c-num" data-sort="cacheWrite">Cache&nbsp;w</th>
@@ -47,8 +50,10 @@
         <tfoot>
           <tr id="totalRow" class="total">
             <td class="c-name">Total</td>
+            <td class="c-group"></td>
             <td class="c-num" id="tAllocated">—</td>
             <td class="c-num muted" id="tCost">—</td>
+            <td class="c-num" id="tFable">—</td>
             <td class="c-num" id="tOutput">—</td>
             <td class="c-num" id="tInput">—</td>
             <td class="c-num" id="tCacheWrite">—</td>
@@ -81,7 +86,8 @@
         window's <span id="basisLabel">output tokens</span>. It is an allocation of a
         real invoice — not a per-project charge.
         <strong class="muted">~API-equiv</strong> simulates public API pricing and is an
-        estimate; nobody billed it.
+        estimate; nobody billed it. <strong>Fable</strong> is excluded from the plan
+        split: it spends usage credits, not your plan windows.
       </p>
       <p class="dim">
         Counted on this Mac only: <span id="scanNote">—</span>. Usage from claude.ai, the
