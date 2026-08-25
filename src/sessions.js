@@ -340,6 +340,11 @@ function render() {
   const key = SORTS[state.sort] || SORTS.output;
   projects.sort((a, b) => key(b) - key(a));
 
+  // Resolve membership HERE, not at load time: assigning a project changes the
+  // mapping without refetching, and reading a stale `_group` was why picking a
+  // group saved to disk but left the row sitting in its old band.
+  for (const p of projects) p._group = state.groups.projects[p.path] || UNGROUPED;
+
   // Bucket by group. Ungrouped always sits last: it's the inbox, not a client.
   const buckets = new Map();
   for (const p of projects) {
@@ -511,7 +516,6 @@ async function load() {
       p._fable = fableOut(p);
       p._share = planOut(p) / totalPlanOut;
       p._alloc = plan * invoiceFraction * p._share;
-      p._group = state.groups.projects[p.path] || UNGROUPED;
     }
     state.data = res;
 

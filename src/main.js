@@ -253,23 +253,44 @@ async function resizeWindow(w, h) {
   }
 }
 
-// Extra meters (model-scoped windows, credits) grow the card — the base sizes
-// assume the original two.
-let extraMeters = 0;
-const EXTRA_METER_PX = 92;
-function sizeFor(mode) {
-  const [w, h] = SIZES[mode];
-  const grows = mode === "compact" || mode === "info";
-  return [w, grows ? h + extraMeters * EXTRA_METER_PX : h];
+// The card's height is MEASURED, not guessed. Meters come and go (a scoped
+// window like Fable appears, credits hide when unspendable) and the detail panel
+// grew a row — every guessed constant eventually clipped the bottom off.
+function contentHeight() {
+  const cs = getComputedStyle(el.card);
+  const gap = parseFloat(cs.rowGap || cs.gap) || 0;
+  let h = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  let n = 0;
+  for (const child of el.card.children) {
+    const s = getComputedStyle(child);
+    // Overlays and creature mode are absolutely positioned over the card —
+    // they don't add to its flow height.
+    if (s.display === "none" || s.position === "absolute") continue;
+    h += child.getBoundingClientRect().height;
+    n++;
+  }
+  return Math.round(h + Math.max(0, n - 1) * gap);
+}
+
+function fitWindow() {
+  if (view === "creature") return resizeWindow(...SIZES.creature);
+  const [w] = SIZES[view] || SIZES.compact;
+  requestAnimationFrame(() => {
+    const h = clamp(contentHeight(), 200, 900);
+    resizeWindow(w, h);
+  });
 }
 
 async function setView(mode) {
   const prev = view;
   view = mode;
   el.card.dataset.view = mode;
-  resizeWindow(...sizeFor(mode));
+  fitWindow();
 
   mode === "info" ? startCost() : stopCost();
+  // Paint what we already have immediately; the ETA and credit lines are
+  // derived from the last poll, so waiting up to 30s for them is needless.
+  if (mode === "info" && lastActive) renderActive(lastActive);
 
   if (mode === "settings") {
     refreshCost(); // block API-equiv (once)
@@ -483,6 +504,10 @@ const refreshMonth = guardedInvoke(
 let costTimer = null;
 function startCost() {
   if (costTimer) return;
+  // ccusage rescans the whole transcript archive (~8-10s here), so the first
+  // paint is slow. "…" says loading; "—" would read as "nothing to show".
+  for (const n of [el.dCost, el.dBurn, el.dProj, el.dTokens, el.dCache])
+    if (n && n.textContent === "—") n.textContent = "…";
   refreshCost();
   costTimer = setInterval(refreshCost, POLL_MS);
 }
@@ -747,13 +772,7 @@ function renderActive(u) {
   renderScoped(u);
   renderCredits(u);
   el.dCredits.textContent = creditsLine(u);
-  // Grow/shrink the window when the number of meters changes (a scoped window
-  // can appear or disappear between polls).
-  const count = el.scopedMeters.childElementCount + (el.crMeter.hidden ? 0 : 1);
-  if (count !== extraMeters) {
-    extraMeters = count;
-    if (view === "compact" || view === "info") resizeWindow(...sizeFor(view));
-  }
+  fitWindow();
 
   // Mark the binding window — but only once there's real pressure, so low usage
   // stays calm (no "winner" at 5% vs 3%).

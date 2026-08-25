@@ -176,6 +176,11 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+/* `display: flex` above outranks the UA's `[hidden] { display: none }`, so
+   without this an empty Credits meter renders even when JS hides it. */
+.meter[hidden] {
+  display: none;
+}
 .meter-top {
   display: flex;
   align-items: center;
