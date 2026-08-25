@@ -63,25 +63,31 @@ body {
 }
 
 /* ---- header (always on top of overlays so ✕ stays reachable) ---- */
+/* Five buttons + mascot + title have to fit 250pt of usable width. Tight gaps
+   and padding are load-bearing: any looser and the ✕ clips off the edge. */
 .head {
   position: relative;
   z-index: 3;
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 5px;
+  min-width: 0;
 }
 .mascot {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   image-rendering: pixelated;
   cursor: pointer;
   flex: none;
 }
 .title {
   font-family: "Tiempos", Georgia, serif;
-  font-size: 27px;
+  font-size: 23px;
   font-weight: 400;
   line-height: 1;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 .stale-dot {
   margin-left: auto;
@@ -122,11 +128,9 @@ body {
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  padding: 3px 5px;
+  padding: 2px 3px;
   border-radius: 6px;
-}
-.stale-dot + .hbtn {
-  margin-left: 4px;
+  flex: none;
 }
 .hbtn:hover {
   color: var(--fg);

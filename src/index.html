@@ -58,6 +58,22 @@
           <div class="bar"><div id="wkBar" class="bar-fill"></div></div>
           <span id="wkReset" class="reset">—</span>
         </div>
+
+        <!-- Model-scoped windows (e.g. Fable's own weekly bucket) are rendered
+             here, generically: Anthropic returns them in a `limits[]` array and
+             adds new ones over time. Empty unless the account has any. -->
+        <div id="scopedMeters"></div>
+
+        <!-- Usage credits, in real money. Hidden unless credits are in play. -->
+        <div class="meter" id="crMeter" hidden>
+          <div class="meter-top">
+            <span id="crPct" class="pct">—</span>
+            <span class="pill">Credits</span>
+          </div>
+          <div class="bar"><div id="crBar" class="bar-fill"></div></div>
+          <span id="crNote" class="reset">—</span>
+        </div>
+
       </section>
 
       <!-- Expanded detail panel (info view) — ETA headline + ccusage cost -->
@@ -74,6 +90,7 @@
         <div class="drow"><span class="dl">Models</span><span id="dModels" class="dv">—</span></div>
         <div class="drow"><span class="dl">Tokens</span><span id="dTokens" class="dv">—</span></div>
         <div class="drow"><span class="dl">Cache hit</span><span id="dCache" class="dv">—</span></div>
+        <div class="drow"><span class="dl">Credits</span><span id="dCredits" class="dv">—</span></div>
       </section>
 
       <footer class="status">

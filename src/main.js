@@ -121,7 +121,8 @@ function cache() {
     "settingsBtn", "sessionsBtn", "themeSeg", "planSeg", "notifToggle", "glassToggle", "sSub", "sBlock", "sMonth", "sValue",
     "curMeter", "curPct", "curBar", "curReset", "curTrend",
     "wkMeter", "wkPct", "wkBar", "wkReset",
-    "statusText", "errMsg", "dEta", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
+    "crMeter", "crPct", "crBar", "crNote", "scopedMeters",
+    "statusText", "errMsg", "dEta", "dCredits", "dCost", "dBurn", "dProj", "dModels", "dTokens", "dCache",
     "connectBtn", "connectStart", "codeRow", "codeInput", "pasteBtn", "codeSubmit",
     "connectHint", "connectBack",
     "accountBtn",
@@ -252,11 +253,21 @@ async function resizeWindow(w, h) {
   }
 }
 
+// Extra meters (model-scoped windows, credits) grow the card — the base sizes
+// assume the original two.
+let extraMeters = 0;
+const EXTRA_METER_PX = 92;
+function sizeFor(mode) {
+  const [w, h] = SIZES[mode];
+  const grows = mode === "compact" || mode === "info";
+  return [w, grows ? h + extraMeters * EXTRA_METER_PX : h];
+}
+
 async function setView(mode) {
   const prev = view;
   view = mode;
   el.card.dataset.view = mode;
-  resizeWindow(...SIZES[mode]);
+  resizeWindow(...sizeFor(mode));
 
   mode === "info" ? startCost() : stopCost();
 
@@ -642,6 +653,80 @@ function statusLine(u, binding) {
   return STATUS_WORDS[statusIdx % STATUS_WORDS.length];
 }
 
+// Model-scoped windows (Fable's weekly bucket today; whatever Anthropic adds
+// tomorrow). Built from the generic `limits[]` array so a new scope shows up
+// without a code change — the headers never carried these at all.
+function renderScoped(u) {
+  const scoped = (u.limits || []).filter((l) => l.kind === "weekly_scoped" && l.label);
+  el.scopedMeters.replaceChildren();
+  for (const l of scoped) {
+    const m = document.createElement("div");
+    m.className = "meter";
+    m.dataset.zone = zoneOf(l.pct);
+    // Anthropic's own severity outranks our thresholds when it's louder.
+    if (l.severity === "warning" && m.dataset.zone === "safe") m.dataset.zone = "warn";
+    m.dataset.binding = l.active ? "true" : "false";
+    // Built node-by-node rather than with innerHTML: this file's audited
+    // invariant is that every UI write goes through textContent.
+    const mk = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      n.className = cls;
+      if (text !== undefined) n.textContent = text;
+      return n;
+    };
+    const top = mk("div", "meter-top");
+    top.append(mk("span", "pct", `${l.pct}%`), mk("span", "pill", l.label));
+    const bar = mk("div", "bar");
+    const fill = mk("div", "bar-fill");
+    fill.style.width = `${clamp(l.pct, 0, 100)}%`;
+    bar.append(fill);
+    m.append(top, bar, mk("span", "reset", fmtReset(l.reset_min)));
+    el.scopedMeters.append(m);
+  }
+}
+
+// Usage credits — REAL money in the account's own currency, unlike the
+// API-equivalent estimate elsewhere. Shown only when credits are actually in
+// play, to keep the card calm.
+function fmtMinor(minor, currency, exponent) {
+  const v = minor / Math.pow(10, exponent ?? 2);
+  try {
+    return v.toLocaleString([], { style: "currency", currency: currency || "USD" });
+  } catch {
+    return `${currency} ${v.toFixed(2)}`;
+  }
+}
+function renderCredits(u) {
+  const s = u.spend || {};
+  // ONLY when credits can actually be spent. When they can't, the percentage is
+  // a trap: it measures the monthly SPEND CAP consumed, not credit available —
+  // so an "out of credits" account would show a calm green "52%", reading as
+  // "half left" when the real answer is "none". Disabled state lives in the
+  // info panel as words instead.
+  const spendable = s.present && s.enabled;
+  el.crMeter.hidden = !spendable;
+  if (!spendable) return;
+  el.crPct.textContent = `${s.pct}%`;
+  el.crBar.style.width = `${clamp(s.pct, 0, 100)}%`;
+  el.crMeter.dataset.zone = zoneOf(s.pct);
+  el.crNote.textContent = `${fmtMinor(s.used_minor, s.currency, s.exponent)} of ${fmtMinor(
+    s.limit_minor,
+    s.currency,
+    s.exponent,
+  )} used`;
+}
+
+/// Words, not a bar — for the info panel.
+function creditsLine(u) {
+  const s = u.spend || {};
+  if (!s.present) return "—";
+  const used = fmtMinor(s.used_minor, s.currency, s.exponent);
+  const cap = fmtMinor(s.limit_minor, s.currency, s.exponent);
+  if (s.enabled) return `${used} of ${cap}`;
+  if (s.disabled_reason === "out_of_credits") return `none left (${used} of ${cap} spent)`;
+  return `off (${used} of ${cap})`;
+}
+
 function renderActive(u) {
   // Bars: LENGTH = magnitude; zone (CSS [data-zone]) = alert color only.
   el.curPct.textContent = `${u.current_pct}%`;
@@ -659,13 +744,32 @@ function renderActive(u) {
   el.wkReset.textContent = fmtReset(u.weekly_reset_min);
 
   renderTrend(lastRatePerHour);
+  renderScoped(u);
+  renderCredits(u);
+  el.dCredits.textContent = creditsLine(u);
+  // Grow/shrink the window when the number of meters changes (a scoped window
+  // can appear or disappear between polls).
+  const count = el.scopedMeters.childElementCount + (el.crMeter.hidden ? 0 : 1);
+  if (count !== extraMeters) {
+    extraMeters = count;
+    if (view === "compact" || view === "info") resizeWindow(...sizeFor(view));
+  }
 
   // Mark the binding window — but only once there's real pressure, so low usage
   // stays calm (no "winner" at 5% vs 3%).
+  // Exactly ONE meter may carry the marker. When the API reports which window
+  // is active, that is the answer — including when it's a model-scoped one
+  // (renderScoped marks those), in which case Current and Weekly both clear.
   const binding = bindingOf(u);
-  const pressure = Math.max(u.current_pct, u.weekly_pct) >= 50;
-  el.curMeter.dataset.binding = pressure && binding === "current" ? "true" : "false";
-  el.wkMeter.dataset.binding = pressure && binding === "weekly" ? "true" : "false";
+  const active = (u.limits || []).find((l) => l.active);
+  if (active) {
+    el.curMeter.dataset.binding = active.kind === "session" ? "true" : "false";
+    el.wkMeter.dataset.binding = active.kind === "weekly_all" ? "true" : "false";
+  } else {
+    const pressure = Math.max(u.current_pct, u.weekly_pct) >= 50;
+    el.curMeter.dataset.binding = pressure && binding === "current" ? "true" : "false";
+    el.wkMeter.dataset.binding = pressure && binding === "weekly" ? "true" : "false";
+  }
 
   // ETA-to-limit + throttle status drive the footer + card color (computed on
   // fresh data in render(); see lastRisk/lastEtaMin).
