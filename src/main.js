@@ -4,6 +4,11 @@ const { invoke } = window.__TAURI__.core;
 // consecutive samples are identical (each poll costs a sliver of the very
 // quota it measures), snap back on change.
 const POLL_MS = 30_000;
+// Cost is on its OWN cadence: a ccusage run costs ~8-10s of CPU because it
+// rescans the whole transcript archive, and cost/burn/projection move on the
+// scale of minutes. Reusing the 30s usage cadence spent ~25-30% of a core for
+// nothing while the info panel was open.
+const COST_POLL_MS = 300_000;
 const POLL_SLOW_MS = 120_000;
 const FLAT_SAMPLES_TO_SLOW = 5;
 
@@ -509,7 +514,7 @@ function startCost() {
   for (const n of [el.dCost, el.dBurn, el.dProj, el.dTokens, el.dCache])
     if (n && n.textContent === "—") n.textContent = "…";
   refreshCost();
-  costTimer = setInterval(refreshCost, POLL_MS);
+  costTimer = setInterval(refreshCost, COST_POLL_MS);
 }
 function stopCost() {
   clearInterval(costTimer);

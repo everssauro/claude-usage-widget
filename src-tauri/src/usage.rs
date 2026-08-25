@@ -13,6 +13,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -725,25 +726,75 @@ fn ccusage_cmd() -> &'static Result<CcusageCmd, String> {
 }
 
 /// Run `ccusage <subcommand args>` and return its stdout (or an error message).
+/// A ccusage run takes ~8-10s here: it rescans the whole transcript archive
+/// (~1 GB) every invocation. Two guards make that survivable.
+///
+/// TTL cache: opening the settings view fires two runs back to back, and
+/// toggling views re-fires them; without this the app can spend minutes of CPU
+/// answering the same question.
+const CCUSAGE_TTL: Duration = Duration::from_secs(120);
+/// Kill deadline. `Command::output()` has none, so a wedged child blocked its
+/// worker forever — and the JS `busy` guard, which only clears in `finally`,
+/// latched permanently: the cost figures froze with no error shown.
+const CCUSAGE_TIMEOUT: Duration = Duration::from_secs(25);
+
+fn ccusage_cache() -> &'static Mutex<HashMap<String, (Instant, String)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, String)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn run_ccusage(args: &[&str]) -> Result<String, String> {
+    let key = args.join(" ");
+    if let Some((at, body)) = ccusage_cache().lock().unwrap().get(&key) {
+        if at.elapsed() < CCUSAGE_TTL {
+            return Ok(body.clone());
+        }
+    }
     let cmd = match ccusage_cmd() {
         Ok(c) => c,
         Err(e) => return Err(e.clone()),
     };
-    let output = Command::new(&cmd.program)
+    let mut child = Command::new(&cmd.program)
         .args(&cmd.base_args)
         .args(args)
         .env("PATH", &cmd.path)
-        .output();
-    match output {
-        Err(e) => Err(format!("failed to run ccusage: {e}")),
-        Ok(out) if !out.status.success() => Err(format!(
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to run ccusage: {e}"))?;
+
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Err(e) => return Err(format!("ccusage wait failed: {e}")),
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if started.elapsed() > CCUSAGE_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("ccusage timed out".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("ccusage output failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
             "ccusage exited {}: {}",
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
-        )),
-        Ok(out) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        ));
     }
+    let body = String::from_utf8_lossy(&out.stdout).into_owned();
+    ccusage_cache()
+        .lock()
+        .unwrap()
+        .insert(key, (Instant::now(), body.clone()));
+    Ok(body)
 }
 
 /// Tauri command: active-block cost/burn/projection. Polled only while the info
@@ -818,6 +869,34 @@ mod tests {
         assert_eq!(u.status, "allowed");
         assert_eq!(u.weekly_status, "rejected");
         assert_eq!(u.representative, "seven_day");
+    }
+
+    #[test]
+    fn ccusage_cache_serves_repeats_within_ttl() {
+        // Proves the guard that matters: the settings view fires two runs back
+        // to back and view toggles re-fire them, each costing ~8-10s of CPU.
+        let key = "test blocks".to_string();
+        ccusage_cache()
+            .lock()
+            .unwrap()
+            .insert(key.clone(), (Instant::now(), "{\"cached\":true}".into()));
+        let hit = {
+            let c = ccusage_cache().lock().unwrap();
+            let (at, body) = c.get(&key).unwrap();
+            (at.elapsed() < CCUSAGE_TTL).then(|| body.clone())
+        };
+        assert_eq!(hit.as_deref(), Some("{\"cached\":true}"));
+
+        // An entry older than the TTL must NOT be served — stale cost figures
+        // presented as current is the failure this cache could introduce.
+        let stale = Instant::now() - CCUSAGE_TTL - Duration::from_secs(1);
+        ccusage_cache()
+            .lock()
+            .unwrap()
+            .insert(key.clone(), (stale, "old".into()));
+        let c = ccusage_cache().lock().unwrap();
+        let (at, _) = c.get(&key).unwrap();
+        assert!(at.elapsed() >= CCUSAGE_TTL, "stale entry must expire");
     }
 
     #[test]
