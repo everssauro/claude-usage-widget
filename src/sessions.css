@@ -92,7 +92,8 @@ body {
 }
 .search {
   margin-left: auto;
-  width: 200px;
+  width: 170px;
+  flex: none;
   background: var(--panel);
   border: 1px solid var(--track);
   border-radius: 8px;
@@ -114,7 +115,9 @@ body {
   background: none;
   border: none;
   color: var(--dim);
-  font-size: 15px;
+  font-size: 13px;
+  white-space: nowrap;
+  flex: none;
   cursor: pointer;
   padding: 4px 6px;
   border-radius: 6px;
@@ -132,6 +135,9 @@ body {
 }
 .grid {
   width: 100%;
+  /* Below this the columns crush each other and names truncate to nothing;
+     the container scrolls horizontally instead, so resizing stays useful. */
+  min-width: 1080px;
   border-collapse: collapse;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
@@ -170,7 +176,7 @@ body {
 }
 .grid td.c-name {
   text-align: left;
-  width: 34%;
+  width: 30%;
   max-width: 0; /* let the ellipsis work inside a table cell */
   overflow: hidden;
   text-overflow: ellipsis;
@@ -195,11 +201,17 @@ body {
   width: 10px;
   flex: none;
 }
+/* The name wins the space; the path yields it. Reversed, every row read "h…". */
 .p-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .p-path {
+  flex: 1 1 0;
+  min-width: 0;
   color: var(--dim);
   font-size: 10.5px;
   overflow: hidden;
@@ -295,6 +307,29 @@ body {
 }
 .notes strong.muted {
   color: var(--dim);
+}
+
+.group-input {
+  width: 190px;
+  flex: none;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+}
+.mini-btn.danger:hover {
+  color: #e0726a;
+  border-color: #e0726a;
+}
+.bar .seg {
+  flex: none;
+}
+.window-label {
+  flex: none;
 }
 
 /* ---- groups (user-named folders: SlimPass, Ton, Saggezza…) ---- */

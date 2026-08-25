@@ -148,13 +148,25 @@ function groupSelect(p) {
   sel.addEventListener("change", (e) => {
     e.stopPropagation();
     if (sel.value === "__new__") {
-      const g = newGroup();
-      if (!g) return render();
-      return assignProject(p.path, g.id);
+      sel.value = p._group; // don't leave the control showing a pseudo-option
+      return openGroupInput({ mode: "assign", path: p.path });
     }
     assignProject(p.path, sel.value);
   });
   return sel;
+}
+
+/// The full path is unreadable in a table cell and starves the NAME of space —
+/// which is how every project rendered as "h…", "clau…", "cha…". Show the tail
+/// only; the full path stays in the row's tooltip.
+function shortPath(path) {
+  const home = "/Users/";
+  let t = path;
+  const i = t.indexOf(home);
+  if (i === 0) t = "~/" + t.split("/").slice(3).join("/");
+  const parts = t.split("/");
+  const parent = parts.slice(0, -1); // drop the leaf: it's already the name
+  return parent.length > 3 ? "…/" + parent.slice(-2).join("/") : parent.join("/");
 }
 
 function projectRow(p) {
@@ -172,9 +184,10 @@ function projectRow(p) {
   nm.textContent = p.name;
   const pa = document.createElement("span");
   pa.className = "p-path";
-  pa.textContent = p.path;
+  pa.textContent = shortPath(p.path);
   wrap.append(tw, nm, pa);
   name.append(wrap);
+  name.title = p.path;
 
   const gcell = document.createElement("td");
   gcell.className = "c-group";
@@ -272,23 +285,27 @@ function groupRow(id, members, collapsed) {
     const ren = document.createElement("button");
     ren.className = "mini-btn";
     ren.textContent = "rename";
-    ren.title = "rename or delete this group";
     ren.addEventListener("click", (e) => {
       e.stopPropagation();
-      const next = prompt("Group name (empty deletes it)", groupName(id));
-      if (next === null) return;
-      if (!next.trim()) {
-        state.groups.groups = state.groups.groups.filter((g) => g.id !== id);
-        for (const [path, gid] of Object.entries(state.groups.projects))
-          if (gid === id) delete state.groups.projects[path];
-      } else {
-        const g = state.groups.groups.find((x) => x.id === id);
-        if (g) g.name = next.trim();
-      }
-      saveGroups();
-      render();
+      openGroupInput({ mode: "rename", id }, groupName(id));
     });
-    gcell.append(ren);
+    // Two-step delete instead of confirm(): this webview has no confirm dialog,
+    // and a one-click destructive control would be a trap.
+    const del = document.createElement("button");
+    del.className = "mini-btn danger";
+    del.textContent = "×";
+    del.title = "delete group (click twice)";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (del.dataset.armed === "1") return deleteGroup(id);
+      del.dataset.armed = "1";
+      del.textContent = "sure?";
+      setTimeout(() => {
+        del.dataset.armed = "";
+        del.textContent = "×";
+      }, 2500);
+    });
+    gcell.append(ren, del);
   }
 
   tr.append(
@@ -400,13 +417,52 @@ async function saveGroups() {
 const groupName = (id) =>
   (state.groups.groups.find((g) => g.id === id) || {}).name || "Ungrouped";
 
-function newGroup(preset) {
-  const name = (preset ?? prompt("Group name (e.g. SlimPass, Ton, Saggezza)"))?.trim();
-  if (!name) return null;
+// Inline name editor. window.prompt() is unusable here: wry implements no
+// JavaScript panel delegates, so prompt() returns null (and confirm() false)
+// without ever showing anything — which is exactly why groups couldn't be
+// created at all.
+let pendingEdit = null; // {mode:"new"} | {mode:"rename", id} | {mode:"assign", path}
+
+function openGroupInput(edit, value = "") {
+  pendingEdit = edit;
+  el.groupInput.hidden = false;
+  el.groupInput.value = value;
+  el.groupInput.placeholder =
+    edit.mode === "rename" ? "New name…" : "Group name (SlimPass, Ton, Saggezza…)";
+  el.groupInput.focus();
+  el.groupInput.select();
+}
+function closeGroupInput() {
+  pendingEdit = null;
+  el.groupInput.hidden = true;
+  el.groupInput.value = "";
+}
+function commitGroupInput() {
+  const name = el.groupInput.value.trim();
+  const edit = pendingEdit;
+  closeGroupInput();
+  if (!edit || !name) return render();
+  if (edit.mode === "rename") {
+    const g = state.groups.groups.find((x) => x.id === edit.id);
+    if (g) g.name = name;
+    saveGroups();
+    return render();
+  }
   const g = { id: `g${Date.now().toString(36)}`, name };
   state.groups.groups.push(g);
+  // "New group…" chosen from a project's dropdown: create it AND drop the
+  // project straight in, which is what that gesture means.
+  if (edit.mode === "assign") state.groups.projects[edit.path] = g.id;
   saveGroups();
-  return g;
+  render();
+}
+
+function deleteGroup(id) {
+  state.groups.groups = state.groups.groups.filter((g) => g.id !== id);
+  for (const [path, gid] of Object.entries(state.groups.projects))
+    if (gid === id) delete state.groups.projects[path];
+  saveGroups();
+  render();
 }
 
 function assignProject(path, groupId) {
@@ -474,10 +530,32 @@ window.addEventListener("DOMContentLoaded", () => {
     "content", "rows", "search", "windowSeg", "windowLabel", "refreshBtn", "errMsg",
     "planPrice", "basisLabel", "scanNote",
     "tAllocated", "tCost", "tOutput", "tInput", "tCacheWrite", "tCacheRead",
-    "tRequests", "tActive", "tSessions", "tFable", "newGroupBtn",
+    "tRequests", "tActive", "tSessions", "tFable", "newGroupBtn", "groupInput",
   ]) {
     el[id] = document.getElementById(id);
   }
+  // Remember the size the user picked. The window is resizable, but a table you
+  // widened once should still be wide next time you open it.
+  const W = window.__TAURI__.window;
+  try {
+    const saved = JSON.parse(localStorage.getItem("cuw-sessions-size") || "null");
+    if (saved?.w > 300 && saved?.h > 200) {
+      W.getCurrentWindow().setSize(new window.__TAURI__.dpi.LogicalSize(saved.w, saved.h));
+    }
+  } catch {
+    /* first run */
+  }
+  let sizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => {
+      localStorage.setItem(
+        "cuw-sessions-size",
+        JSON.stringify({ w: window.innerWidth, h: window.innerHeight }),
+      );
+    }, 400);
+  });
+
   // Inherit the widget's theme so the two windows don't disagree.
   document.documentElement.dataset.theme = localStorage.getItem("cuw-theme") || "dark";
 
@@ -494,8 +572,16 @@ window.addEventListener("DOMContentLoaded", () => {
     render();
   });
   el.refreshBtn.addEventListener("click", load);
-  el.newGroupBtn.addEventListener("click", () => {
-    if (newGroup()) render();
+  el.newGroupBtn.addEventListener("click", () => openGroupInput({ mode: "new" }));
+  el.groupInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") commitGroupInput();
+    if (e.key === "Escape") {
+      closeGroupInput();
+      render();
+    }
+  });
+  el.groupInput.addEventListener("blur", () => {
+    if (pendingEdit) commitGroupInput();
   });
   // Any uncaught error would otherwise leave the table looking merely inert.
   window.addEventListener("error", (e) => {

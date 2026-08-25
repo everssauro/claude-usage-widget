@@ -3,5 +3,9 @@
   "identifier": "sessions",
   "description": "Capability for the session-breakdown window (a normal window, not the panel)",
   "windows": ["sessions"],
-  "permissions": ["core:default", "core:window:allow-close"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-size"
+  ]
 }

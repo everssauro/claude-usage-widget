@@ -341,7 +341,7 @@ async fn open_sessions(app: AppHandle) -> Result<(), String> {
         )
         .title("Claude Usage — Sessions")
         .inner_size(940.0, 620.0)
-        .min_inner_size(680.0, 380.0)
+        .min_inner_size(560.0, 320.0)
         .resizable(true)
         // Windows created at runtime do NOT inherit tauri.conf.json's window
         // config, so this has to be set here too — without it the first click
