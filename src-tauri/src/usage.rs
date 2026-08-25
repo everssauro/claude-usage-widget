@@ -51,6 +51,182 @@ pub struct Usage {
     /// "seven_day" (and possibly others). Beats our max() guess when present;
     /// empty when the header is absent, and the frontend falls back.
     pub representative: String,
+    /// Usage credits ("overage"). A SECOND currency, not part of the plan:
+    /// Fable 5 does not consume the 5h/7d windows at all — the official client
+    /// says so outright ("Fable 5 is now using usage credits instead of your
+    /// plan limits"). A widget that only shows the plan windows is therefore
+    /// blind to every Fable token spent.
+    pub credits: Credits,
+    /// Grace period: over the limit but still being served, temporarily.
+    pub grace_status: String,
+    /// Anthropic flagged the window as past its warning threshold. More
+    /// authoritative than comparing our own percentages to a guessed number.
+    pub surpassed_5h: bool,
+    pub surpassed_7d: bool,
+    /// Every window Anthropic reports, including model-scoped ones (Fable).
+    /// Empty on the header fallback path — the headers don't carry them.
+    pub limits: Vec<ScopedLimit>,
+    /// Credits as real money. Preferred over `credits` (header-derived).
+    pub spend: Spend,
+}
+
+#[derive(Debug, Default, Serialize, PartialEq)]
+pub struct Credits {
+    /// Whether the response said anything about credits at all. Absent headers
+    /// must not read as "0% of credits used".
+    pub present: bool,
+    /// "allowed" | "rejected" | …
+    pub status: String,
+    /// Credits are actively being drawn right now.
+    pub in_use: bool,
+    /// Utilization of the current credit period, 0–100.
+    pub pct: i64,
+    /// Utilization of the monthly credit allowance, 0–100.
+    pub monthly_pct: i64,
+    pub reset_min: i64,
+    /// Why credits are unavailable, e.g. "out_of_credits".
+    pub disabled_reason: String,
+}
+
+/// One entry of the API's generic `limits[]` array. Keeping it generic is the
+/// point: Anthropic adds model- and surface-scoped windows over time (Fable has
+/// its own weekly bucket today), and a generic list surfaces new ones without
+/// us having to guess header names.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ScopedLimit {
+    /// "Fable", "Opus", … — empty for the plain session/weekly windows.
+    pub label: String,
+    /// "session" | "weekly_all" | "weekly_scoped".
+    pub kind: String,
+    pub group: String,
+    pub pct: i64,
+    pub reset_min: i64,
+    /// Anthropic's own severity ("normal" | "warning" | …) — better than
+    /// comparing percentages to thresholds we invented.
+    pub severity: String,
+    /// Anthropic says THIS is the window currently binding you.
+    pub active: bool,
+}
+
+/// Usage credits, in real money, in the user's own currency.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct Spend {
+    pub present: bool,
+    pub used_minor: i64,
+    pub limit_minor: i64,
+    pub currency: String,
+    pub exponent: u32,
+    pub pct: i64,
+    pub enabled: bool,
+    pub disabled_reason: String,
+}
+
+fn minor(v: &serde_json::Value, key: &str) -> i64 {
+    v.get(key)
+        .and_then(|m| m.get("amount_minor"))
+        .and_then(|x| x.as_i64())
+        .unwrap_or(0)
+}
+
+/// Pure: `GET /api/oauth/usage` body → view model.
+///
+/// This is the preferred source over the rate-limit response headers, because
+/// (a) it is a GET, so reading usage no longer spends any, (b) it exposes
+/// model-scoped windows (Fable's weekly bucket is invisible in the headers),
+/// and (c) it reports credits as actual money in the account's currency.
+pub fn parse_usage_api(json: &str, now_unix: f64) -> Result<Usage, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("bad usage payload: {e}"))?;
+
+    let reset_min = |iso: Option<&str>| -> i64 {
+        iso.and_then(crate::sessions::parse_iso_unix)
+            .map(|t| (((t - now_unix) / 60.0).round() as i64).max(0))
+            .unwrap_or(0)
+    };
+
+    let mut limits: Vec<ScopedLimit> = Vec::new();
+    for l in v.get("limits").and_then(|x| x.as_array()).into_iter().flatten() {
+        let s = |k: &str| l.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        limits.push(ScopedLimit {
+            label: l
+                .get("scope")
+                .and_then(|x| x.get("model"))
+                .and_then(|x| x.get("display_name"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            kind: s("kind"),
+            group: s("group"),
+            pct: l.get("percent").and_then(|x| x.as_f64()).unwrap_or(0.0).round() as i64,
+            reset_min: reset_min(l.get("resets_at").and_then(|x| x.as_str())),
+            severity: s("severity"),
+            active: l.get("is_active").and_then(|x| x.as_bool()).unwrap_or(false),
+        });
+    }
+    if limits.is_empty() {
+        return Err("usage payload carried no limits".into());
+    }
+
+    let find = |kind: &str| limits.iter().find(|l| l.kind == kind).cloned();
+    let session = find("session");
+    let weekly = find("weekly_all");
+
+    // Severity is Anthropic's word, so it drives our status directly.
+    let status_of = |l: &Option<ScopedLimit>| match l.as_ref().map(|x| (x.severity.as_str(), x.pct))
+    {
+        Some(("normal", _)) => "allowed".to_string(),
+        Some(("warning", _)) => "allowed_warning".to_string(),
+        Some((_, pct)) if pct >= 100 => "rejected".to_string(),
+        Some((other, _)) => other.to_string(),
+        None => "unknown".to_string(),
+    };
+
+    let spend = v.get("spend").map(|s| Spend {
+        present: true,
+        used_minor: minor(s, "used"),
+        limit_minor: minor(s, "limit"),
+        currency: s
+            .get("used")
+            .and_then(|u| u.get("currency"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("USD")
+            .to_string(),
+        exponent: s
+            .get("used")
+            .and_then(|u| u.get("exponent"))
+            .and_then(|x| x.as_u64())
+            .unwrap_or(2) as u32,
+        pct: s.get("percent").and_then(|x| x.as_f64()).unwrap_or(0.0).round() as i64,
+        enabled: s.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false),
+        disabled_reason: s
+            .get("disabled_reason")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+    });
+
+    // Which window is binding, straight from `is_active` — no max() guessing.
+    let representative = match limits.iter().find(|l| l.active) {
+        Some(l) if l.group == "session" => "five_hour".to_string(),
+        Some(_) => "seven_day".to_string(),
+        None => String::new(),
+    };
+
+    Ok(Usage {
+        current_pct: session.as_ref().map(|l| l.pct).unwrap_or(0),
+        current_reset_min: session.as_ref().map(|l| l.reset_min).unwrap_or(0),
+        weekly_pct: weekly.as_ref().map(|l| l.pct).unwrap_or(0),
+        weekly_reset_min: weekly.as_ref().map(|l| l.reset_min).unwrap_or(0),
+        status: status_of(&session),
+        weekly_status: status_of(&weekly),
+        representative,
+        grace_status: String::new(),
+        surpassed_5h: session.map(|l| l.severity != "normal").unwrap_or(false),
+        surpassed_7d: weekly.map(|l| l.severity != "normal").unwrap_or(false),
+        credits: Credits::default(), // superseded by `spend` on this path
+        spend: spend.unwrap_or_default(),
+        limits,
+    })
 }
 
 /// Pure: turn a header lookup + a reference time into the view model.
@@ -65,6 +241,8 @@ where
             .map(|f| (f * 100.0).round() as i64)
             .unwrap_or(0)
     };
+    // Boolean headers arrive as "true"/"false"; anything else is not a yes.
+    let flag = |name: &str| get(name).map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
     let reset_min = |name: &str| {
         get(name)
             .and_then(|v| v.parse::<f64>().ok())
@@ -90,6 +268,25 @@ where
             .unwrap_or_else(|| "unknown".to_string()),
         representative: get("anthropic-ratelimit-unified-representative-claim")
             .unwrap_or_default(),
+        grace_status: get("anthropic-ratelimit-unified-grace-status").unwrap_or_default(),
+        surpassed_5h: flag("anthropic-ratelimit-unified-5h-surpassed-threshold"),
+        surpassed_7d: flag("anthropic-ratelimit-unified-7d-surpassed-threshold"),
+        credits: Credits {
+            // `present` keys on the status header: the utilization ones are
+            // simply absent when the account has no credit channel, and
+            // defaulting those to 0 would render as "0% of credits used".
+            present: get("anthropic-ratelimit-unified-overage-status").is_some(),
+            status: get("anthropic-ratelimit-unified-overage-status").unwrap_or_default(),
+            in_use: flag("anthropic-ratelimit-unified-overage-in-use"),
+            pct: pct("anthropic-ratelimit-unified-overage-utilization"),
+            monthly_pct: pct("anthropic-ratelimit-unified-overage-period-monthly-utilization"),
+            reset_min: reset_min("anthropic-ratelimit-unified-overage-reset"),
+            disabled_reason: get("anthropic-ratelimit-unified-overage-disabled-reason")
+                .unwrap_or_default(),
+        },
+        // Headers carry neither the model-scoped windows nor money.
+        limits: Vec::new(),
+        spend: Spend::default(),
     }
 }
 
@@ -207,12 +404,41 @@ fn http_agent() -> &'static ureq::Agent {
     })
 }
 
+const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+
+/// Preferred source: a GET that reports every window (including model-scoped
+/// ones like Fable) plus credits in real money — and, unlike the header probe
+/// below, spends none of the quota it is measuring.
+fn fetch_usage_api(token: &str) -> Result<Usage, String> {
+    let resp = http_agent()
+        .get(USAGE_URL)
+        .set("anthropic-beta", "oauth-2025-04-20")
+        .set("user-agent", "claude-code/2.1.5")
+        .set("authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|e| {
+            if let ureq::Error::Status(401 | 403, _) = e {
+                invalidate_token_cache();
+            }
+            format!("usage API: {e}")
+        })?;
+    let body = resp.into_string().map_err(|e| format!("usage API body: {e}"))?;
+    parse_usage_api(&body, now_unix())
+}
+
 fn fetch_usage() -> UsageView {
     let Some(token) = read_token() else {
         return UsageView::Error {
             message: "No Claude account connected".to_string(),
         };
     };
+
+    // Try the rich endpoint first; fall back to the rate-limit headers if it
+    // ever goes away (it is undocumented, like the headers themselves).
+    match fetch_usage_api(&token) {
+        Ok(u) => return UsageView::Active(u),
+        Err(e) => eprintln!("usage API unavailable, falling back to headers: {e}"),
+    }
 
     let body = serde_json::json!({
         "model": "claude-haiku-4-5-20251001",
@@ -592,6 +818,108 @@ mod tests {
         assert_eq!(u.status, "allowed");
         assert_eq!(u.weekly_status, "rejected");
         assert_eq!(u.representative, "seven_day");
+    }
+
+    #[test]
+    fn parses_the_real_oauth_usage_payload() {
+        // Captured live from GET /api/oauth/usage.
+        let u = parse_usage_api(
+            include_str!("../tests/fixtures/oauth-usage.json"),
+            0.0, // epoch → resets are far in the future, so reset_min > 0
+        )
+        .expect("should parse");
+
+        assert_eq!(u.current_pct, 41);
+        assert_eq!(u.weekly_pct, 54);
+        assert_eq!(u.status, "allowed");
+
+        // The whole point: a model-scoped window the headers never exposed.
+        let fable = u
+            .limits
+            .iter()
+            .find(|l| l.label == "Fable")
+            .expect("Fable window must survive parsing");
+        assert_eq!(fable.pct, 84);
+        assert_eq!(fable.kind, "weekly_scoped");
+        assert_eq!(fable.severity, "warning");
+        assert!(fable.active);
+
+        // Anthropic says Fable is what's binding — no max() heuristic needed.
+        assert_eq!(u.representative, "seven_day");
+
+        // Credits are real money, in the account's own currency.
+        assert!(u.spend.present);
+        assert_eq!(u.spend.used_minor, 1050);
+        assert_eq!(u.spend.limit_minor, 2000);
+        assert_eq!(u.spend.currency, "BRL");
+        assert_eq!(u.spend.pct, 52);
+        assert!(!u.spend.enabled);
+        assert_eq!(u.spend.disabled_reason, "out_of_credits");
+    }
+
+    #[test]
+    fn usage_api_rejects_a_payload_with_no_limits() {
+        // Must degrade to the header fallback rather than render zeros.
+        assert!(parse_usage_api(r#"{"limits":[]}"#, 0.0).is_err());
+        assert!(parse_usage_api("not json", 0.0).is_err());
+    }
+
+    #[test]
+    fn parses_usage_credits() {
+        // Fable 5 spends these, not the plan windows — so "no credit headers"
+        // and "0% of credits used" must never look the same.
+        let map = HashMap::from([
+            ("anthropic-ratelimit-unified-overage-status", "allowed"),
+            ("anthropic-ratelimit-unified-overage-in-use", "true"),
+            ("anthropic-ratelimit-unified-overage-utilization", "0.42"),
+            (
+                "anthropic-ratelimit-unified-overage-period-monthly-utilization",
+                "0.07",
+            ),
+        ]);
+        let c = parse_rate_limit(getter(map), 0.0).credits;
+        assert!(c.present);
+        assert!(c.in_use);
+        assert_eq!(c.pct, 42);
+        assert_eq!(c.monthly_pct, 7);
+    }
+
+    #[test]
+    fn credits_absent_is_not_zero_credits() {
+        let c = parse_rate_limit(|_| None, 0.0).credits;
+        assert!(!c.present);
+        assert!(!c.in_use);
+        assert_eq!(c.pct, 0); // meaningless — `present` is what the UI must gate on
+    }
+
+    #[test]
+    fn out_of_credits_is_reported_with_reason() {
+        // This account's real state today.
+        let map = HashMap::from([
+            ("anthropic-ratelimit-unified-overage-status", "rejected"),
+            (
+                "anthropic-ratelimit-unified-overage-disabled-reason",
+                "out_of_credits",
+            ),
+        ]);
+        let c = parse_rate_limit(getter(map), 0.0).credits;
+        assert!(c.present);
+        assert_eq!(c.status, "rejected");
+        assert_eq!(c.disabled_reason, "out_of_credits");
+        assert!(!c.in_use);
+    }
+
+    #[test]
+    fn parses_grace_and_surpassed_flags() {
+        let map = HashMap::from([
+            ("anthropic-ratelimit-unified-grace-status", "active"),
+            ("anthropic-ratelimit-unified-5h-surpassed-threshold", "true"),
+            ("anthropic-ratelimit-unified-7d-surpassed-threshold", "false"),
+        ]);
+        let u = parse_rate_limit(getter(map), 0.0);
+        assert_eq!(u.grace_status, "active");
+        assert!(u.surpassed_5h);
+        assert!(!u.surpassed_7d);
     }
 
     #[test]
