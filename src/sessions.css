@@ -122,6 +122,9 @@ body {
   padding: 4px 6px;
   border-radius: 6px;
 }
+.ghost-btn.on {
+  color: var(--accent);
+}
 .ghost-btn:hover {
   color: var(--fg);
   background: var(--track);

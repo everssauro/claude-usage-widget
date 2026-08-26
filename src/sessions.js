@@ -11,7 +11,8 @@ const { invoke } = window.__TAURI__.core;
 const WINDOWS = {
   current: { kind: "reset", secs: 5 * 3600, resetKey: "current_reset_min" },
   weekly: { kind: "reset", secs: 7 * 86400, resetKey: "weekly_reset_min" },
-  month: { kind: "calendar" },
+  month: { kind: "calendar", offset: 0 },
+  lastMonth: { kind: "calendar", offset: -1 },
   all: { kind: "all" },
 };
 
@@ -22,7 +23,12 @@ function windowBounds(name, usage) {
   if (w.kind === "all") return [0, now];
   if (w.kind === "calendar") {
     const d = new Date();
-    return [new Date(d.getFullYear(), d.getMonth(), 1).getTime() / 1000, now];
+    const start = new Date(d.getFullYear(), d.getMonth() + w.offset, 1);
+    // A past month is a CLOSED period — it must end when the month ended, not
+    // "now", or last month's invoice would keep absorbing this month's usage.
+    const end =
+      w.offset === 0 ? now : new Date(d.getFullYear(), d.getMonth(), 1).getTime() / 1000;
+    return [start.getTime() / 1000, end];
   }
   const end = now + usage[w.resetKey] * 60;
   return [end - w.secs, end];
@@ -67,6 +73,7 @@ const state = {
   filter: "",
   expanded: new Set(),
   collapsed: new Set(), // collapsed GROUP bands
+  expandAll: false,
   data: null,
 };
 
@@ -217,7 +224,7 @@ function projectRow(p) {
   wrap.className = "name-cell";
   const tw = document.createElement("span");
   tw.className = "twisty";
-  tw.textContent = state.expanded.has(p.path) ? "▾" : "▸";
+  tw.textContent = state.expandAll || state.expanded.has(p.path) ? "▾" : "▸";
   const nm = document.createElement("span");
   nm.className = "p-name";
   nm.textContent = p.name;
@@ -404,7 +411,7 @@ function render() {
     if (anyGroups && collapsed) continue;
     for (const p of members) {
       el.rows.append(projectRow(p));
-      if (!state.expanded.has(p.path)) continue;
+      if (!state.expandAll && !state.expanded.has(p.path)) continue;
       for (const s of p.sessions) el.rows.append(sessionRow(s));
     }
   }
@@ -558,7 +565,8 @@ async function load() {
 
     el.windowLabel.textContent = `${fmtClock(res.window_start)} → ${fmtClock(res.window_end)}`;
     el.planPrice.textContent = `$${plan}/mo`;
-    el.scanNote.textContent = `${res.projects.length} projects, ${res.total_requests} requests, ${res.files_scanned} transcripts scanned`;
+    const sessCount = res.projects.reduce((a, p) => a + p.sessions.length, 0);
+    el.scanNote.textContent = `${sessCount} sessions across ${res.projects.length} projects, ${res.total_requests} requests, ${res.files_scanned} transcripts scanned`;
     // A session open in a pane but idle spends nothing, so it isn't here. Say so:
     // "where are my other sessions?" is otherwise a reasonable thing to conclude
     // is a bug (measured: 17 sessions open, 6 with activity in the 5h window).
@@ -578,7 +586,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "content", "rows", "search", "windowSeg", "windowLabel", "refreshBtn", "errMsg",
     "planPrice", "basisLabel", "scanNote", "windowNote",
     "tAllocated", "tCost", "tOutput", "tInput", "tCacheWrite", "tCacheRead",
-    "tRequests", "tActive", "tSessions", "tFable", "newGroupBtn", "groupInput",
+    "tRequests", "tActive", "tSessions", "tFable", "newGroupBtn", "groupInput", "expandAllBtn",
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -620,6 +628,15 @@ window.addEventListener("DOMContentLoaded", () => {
     render();
   });
   el.refreshBtn.addEventListener("click", load);
+  // The table is project-first, so sessions hide until a row is expanded —
+  // which reads as "my sessions are missing". One toggle shows them all.
+  el.expandAllBtn.addEventListener("click", () => {
+    state.expandAll = !state.expandAll;
+    if (!state.expandAll) state.expanded.clear();
+    el.expandAllBtn.textContent = state.expandAll ? "▸ Sessions" : "▾ Sessions";
+    el.expandAllBtn.classList.toggle("on", state.expandAll);
+    render();
+  });
   el.newGroupBtn.addEventListener("click", () => openGroupInput({ mode: "new" }));
   el.groupInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") commitGroupInput();

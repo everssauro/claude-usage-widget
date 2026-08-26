@@ -14,12 +14,14 @@
         <button class="seg-btn active" data-window="current">Current 5h</button>
         <button class="seg-btn" data-window="weekly">Weekly</button>
         <button class="seg-btn" data-window="month">This month</button>
+        <button class="seg-btn" data-window="lastMonth">Last month</button>
         <button class="seg-btn" data-window="all">All time</button>
       </div>
 
       <input id="search" class="search" type="search" placeholder="Filter projects…" />
 
       <span id="windowLabel" class="window-label">—</span>
+      <button id="expandAllBtn" class="ghost-btn" title="show every session">▾&nbsp;Sessions</button>
       <button id="newGroupBtn" class="ghost-btn" title="new group">＋&nbsp;Group</button>
       <!-- Inline, not window.prompt(): wry doesn't implement
            runJavaScriptTextInputPanel, so prompt() silently returns null in this

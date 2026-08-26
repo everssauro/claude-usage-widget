@@ -464,7 +464,9 @@ fn scan(window_start: f64, window_end: f64) -> SessionsView {
         let Ok(f) = File::open(path) else { continue };
         for (i, line) in BufReader::new(f).lines().enumerate() {
             // A session being written to right now can have a torn last line.
-            let Ok(line) = line else { break };
+            // A single unreadable line must not truncate the rest of the file:
+            // `break` here would silently drop every session after it.
+            let Ok(line) = line else { continue };
             if i < 20 {
                 if let Some(t) = transcript_title(&line) {
                     if let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) {
@@ -629,6 +631,37 @@ mod tests {
         let m = active_minutes(vec![t, t + 60.0, t + 7260.0, t + 7290.0]);
         assert!((m - 1.5).abs() < 0.001, "got {m}");
         assert_eq!(active_minutes(vec![]), 0.0);
+    }
+
+    /// Manual: dump what an ALL-TIME scan actually finds, to compare against the
+    /// raw archive. Run with `-- --ignored --nocapture dump_all_time`.
+    #[test]
+    #[ignore]
+    fn dump_all_time() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let SessionsView::Active(s) = scan(0.0, now) else {
+            panic!("scan failed")
+        };
+        let sessions: usize = s.projects.iter().map(|p| p.sessions.len()).sum();
+        println!(
+            "RUST all-time: projects={} sessions={} requests={} files_scanned={}",
+            s.projects.len(),
+            sessions,
+            s.total_requests,
+            s.files_scanned
+        );
+        let mut empty_id = 0;
+        for p in &s.projects {
+            for sess in &p.sessions {
+                if sess.session_id.is_empty() {
+                    empty_id += 1;
+                }
+            }
+        }
+        println!("sessions with empty id: {empty_id}");
     }
 
     /// Manual reconciliation against ccusage on the REAL archive. Not part of
