@@ -137,7 +137,7 @@ body {
   width: 100%;
   /* Below this the columns crush each other and names truncate to nothing;
      the container scrolls horizontally instead, so resizing stays useful. */
-  min-width: 1080px;
+  min-width: 980px;
   border-collapse: collapse;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
@@ -333,24 +333,37 @@ body {
 }
 
 /* ---- groups (user-named folders: SlimPass, Ton, Saggezza…) ---- */
-.c-group {
-  width: 132px;
-  text-align: left !important;
+/* Projects are moved by dragging the row onto a group band — that replaced a
+   whole column, which is width this table doesn't have to spare. */
+.p-row {
+  cursor: grab;
 }
-.group-select {
-  width: 100%;
-  background: var(--panel);
-  border: 1px solid var(--track);
-  border-radius: 6px;
-  color: var(--dim);
-  font-family: inherit;
-  font-size: 11px;
-  padding: 3px 6px;
-  cursor: pointer;
+body.dragging,
+body.dragging * {
+  cursor: grabbing !important;
+  user-select: none;
 }
-.group-select:hover {
-  color: var(--fg);
-  border-color: var(--accent);
+.drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  pointer-events: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.g-row.drop-target td {
+  background: var(--accent);
+  color: #fff;
+}
+.g-row.drop-target .g-name,
+.g-row.drop-target .p-path,
+.g-row.drop-target .twisty {
+  color: #fff;
 }
 
 /* A group band is the row you read for "what did this client cost me". */
@@ -379,6 +392,9 @@ body {
   padding-left: 12px;
 }
 
+.name-cell .mini-btn {
+  margin-left: 4px;
+}
 .mini-btn {
   background: none;
   border: 1px solid var(--track);

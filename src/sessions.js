@@ -125,47 +125,86 @@ function td(text, cls) {
   return c;
 }
 
-function groupSelect(p) {
-  const sel = document.createElement("select");
-  sel.className = "group-select";
-  for (const g of state.groups.groups) {
-    const o = document.createElement("option");
-    o.value = g.id;
-    o.textContent = g.name;
-    sel.append(o);
+// ---------------------------------------------------------------------------
+// Drag a project row onto a group band.
+//
+// Mouse events, NOT the HTML5 drag-and-drop API: wry installs a file-drop
+// handler on the webview, and letting the OS arbitrate an in-page drag is a
+// fight not worth having. This also keeps the row's click-to-expand intact —
+// a drag only starts once the pointer has actually travelled.
+// ---------------------------------------------------------------------------
+const DRAG_THRESHOLD_PX = 5;
+const drag = { path: null, name: "", x: 0, y: 0, active: false, ghost: null, over: null, suppressClick: false };
+
+function beginDrag(e, p) {
+  if (e.button !== 0 || e.target.closest("button, input, select")) return;
+  drag.path = p.path;
+  drag.name = p.name;
+  drag.x = e.clientX;
+  drag.y = e.clientY;
+  drag.active = false;
+  document.addEventListener("mousemove", onDragMove);
+  document.addEventListener("mouseup", endDrag);
+}
+
+function startVisualDrag() {
+  drag.active = true;
+  document.body.classList.add("dragging");
+  const g = document.createElement("div");
+  g.className = "drag-ghost";
+  g.textContent = drag.name;
+  document.body.append(g);
+  drag.ghost = g;
+}
+
+function highlight(groupId) {
+  if (drag.over === groupId) return;
+  for (const r of el.rows.querySelectorAll(".drop-target")) r.classList.remove("drop-target");
+  drag.over = groupId;
+  if (groupId == null) return;
+  // Highlight the BAND, wherever the pointer actually is — dropping on a
+  // sibling project means "same group as that one".
+  const band = el.rows.querySelector(`tr.g-row[data-group="${CSS.escape(groupId)}"]`);
+  if (band) band.classList.add("drop-target");
+}
+
+function onDragMove(e) {
+  if (!drag.path) return;
+  if (!drag.active) {
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < DRAG_THRESHOLD_PX) return;
+    startVisualDrag();
   }
-  const none = document.createElement("option");
-  none.value = UNGROUPED;
-  none.textContent = "—";
-  sel.append(none);
-  const nw = document.createElement("option");
-  nw.value = "__new__";
-  nw.textContent = "＋ New group…";
-  sel.append(nw);
-  sel.value = p._group;
-  // Clicks must not bubble into the row's expand/collapse handler.
-  sel.addEventListener("click", (e) => e.stopPropagation());
-  sel.addEventListener("change", (e) => {
-    e.stopPropagation();
-    if (sel.value === "__new__") {
-      sel.value = p._group; // don't leave the control showing a pseudo-option
-      return openGroupInput({ mode: "assign", path: p.path });
-    }
-    assignProject(p.path, sel.value);
-  });
-  return sel;
+  drag.ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
+  const row = document.elementFromPoint(e.clientX, e.clientY)?.closest("tr[data-group]");
+  highlight(row ? row.dataset.group : null);
+}
+
+function endDrag() {
+  document.removeEventListener("mousemove", onDragMove);
+  document.removeEventListener("mouseup", endDrag);
+  const { path, active, over } = drag;
+  drag.ghost?.remove();
+  document.body.classList.remove("dragging");
+  for (const r of el.rows.querySelectorAll(".drop-target")) r.classList.remove("drop-target");
+  drag.ghost = null;
+  drag.path = null;
+  drag.over = null;
+  if (!active) return;
+  // The mouseup that ends a drag also fires a click on the row; swallow it so
+  // the project doesn't expand as a side effect of being moved.
+  drag.suppressClick = true;
+  setTimeout(() => (drag.suppressClick = false), 0);
+  drag.active = false;
+  if (over && path) assignProject(path, over);
 }
 
 /// The full path is unreadable in a table cell and starves the NAME of space —
-/// which is how every project rendered as "h…", "clau…", "cha…". Show the tail
-/// only; the full path stays in the row's tooltip.
+/// which is how every project once rendered as "h…", "clau…", "cha…". Show the
+/// tail only; the full path stays in the row's tooltip.
 function shortPath(path) {
-  const home = "/Users/";
   let t = path;
-  const i = t.indexOf(home);
-  if (i === 0) t = "~/" + t.split("/").slice(3).join("/");
-  const parts = t.split("/");
-  const parent = parts.slice(0, -1); // drop the leaf: it's already the name
+  if (t.startsWith("/Users/")) t = "~/" + t.split("/").slice(3).join("/");
+  const parent = t.split("/").slice(0, -1); // drop the leaf: it's already the name
   return parent.length > 3 ? "…/" + parent.slice(-2).join("/") : parent.join("/");
 }
 
@@ -189,13 +228,10 @@ function projectRow(p) {
   name.append(wrap);
   name.title = p.path;
 
-  const gcell = document.createElement("td");
-  gcell.className = "c-group";
-  gcell.append(groupSelect(p));
-
+  tr.dataset.group = p._group;
+  tr.dataset.path = p.path;
   tr.append(
     name,
-    gcell,
     td(fmtMoney(p._alloc)),
     td("~" + fmtMoney(p._cost), "c-num muted"),
     td(p._fable ? fmtBig(p._fable) : "—", "c-num credit"),
@@ -207,7 +243,9 @@ function projectRow(p) {
     td(fmtMin(p.active_min)),
     td(String(p.sessions.length)),
   );
+  tr.addEventListener("mousedown", (e) => beginDrag(e, p));
   tr.addEventListener("click", () => {
+    if (drag.suppressClick) return; // that click was the end of a drag
     try {
       state.expanded.has(p.path) ? state.expanded.delete(p.path) : state.expanded.add(p.path);
       render();
@@ -237,7 +275,6 @@ function sessionRow(s) {
   sname.append(t, sub);
   sr.append(
     sname,
-    td("", "c-group"),
     td(""),
     td(""),
     td(""),
@@ -277,10 +314,6 @@ function groupRow(id, members, collapsed) {
   cnt.className = "p-path";
   cnt.textContent = `${members.length} project${members.length === 1 ? "" : "s"}`;
   wrap.append(tw, nm, cnt);
-  name.append(wrap);
-
-  const gcell = document.createElement("td");
-  gcell.className = "c-group";
   if (id !== UNGROUPED) {
     const ren = document.createElement("button");
     ren.className = "mini-btn";
@@ -305,12 +338,12 @@ function groupRow(id, members, collapsed) {
         del.textContent = "×";
       }, 2500);
     });
-    gcell.append(ren, del);
+    wrap.append(ren, del);
   }
+  name.append(wrap);
 
   tr.append(
     name,
-    gcell,
     td(fmtMoney(sum((p) => p._alloc))),
     td("~" + fmtMoney(sum((p) => p._cost)), "c-num muted"),
     td(sum((p) => p._fable) ? fmtBig(sum((p) => p._fable)) : "—", "c-num credit"),
@@ -351,13 +384,17 @@ function render() {
     if (!buckets.has(p._group)) buckets.set(p._group, []);
     buckets.get(p._group).push(p);
   }
+  // Every defined group gets a band even when empty — an empty group with no
+  // band would be an impossible drop target, and Ungrouped is the only way to
+  // drag a project back out.
+  const anyGroups = state.groups.groups.length > 0;
+  for (const g of state.groups.groups) if (!buckets.has(g.id)) buckets.set(g.id, []);
+  if (anyGroups && !buckets.has(UNGROUPED)) buckets.set(UNGROUPED, []);
   const order = state.groups.groups
     .map((g) => g.id)
-    .filter((id) => buckets.has(id))
     .concat(buckets.has(UNGROUPED) ? [UNGROUPED] : []);
 
   el.rows.replaceChildren();
-  const anyGroups = state.groups.groups.length > 0;
   for (const id of order) {
     const members = buckets.get(id);
     const collapsed = state.collapsed.has(id);
