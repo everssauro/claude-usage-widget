@@ -90,6 +90,10 @@ pub struct SessionRow {
     pub last_ts: f64,
     /// Wall-clock minutes with gaps > IDLE_GAP_SECS removed.
     pub active_min: f64,
+    /// Per-model split, so a row's totals can be explained on hover. In the
+    /// overview what matters is tokens and cost; which model produced them is
+    /// detail, not a column.
+    pub models: Vec<ModelUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -273,6 +277,7 @@ where
         requests: u64,
         subagent_requests: u64,
         ts: Vec<f64>,
+        models: HashMap<String, (Tokens, u64)>,
     }
 
     let mut by_project: HashMap<String, Acc> = HashMap::new();
@@ -304,6 +309,12 @@ where
         if r.is_sidechain {
             s.subagent_requests += 1;
         }
+        let sm = s
+            .models
+            .entry(r.model.clone())
+            .or_insert((Tokens::default(), 0));
+        sm.0.add(&r.tokens);
+        sm.1 += 1;
         s.ts.push(r.ts);
 
         totals.add(&r.tokens);
@@ -320,6 +331,16 @@ where
                 .map(|(session_id, s)| {
                     let first = s.ts.iter().cloned().fold(f64::MAX, f64::min);
                     let last = s.ts.iter().cloned().fold(f64::MIN, f64::max);
+                    let mut models: Vec<ModelUsage> = s
+                        .models
+                        .into_iter()
+                        .map(|(model, (tokens, requests))| ModelUsage {
+                            model,
+                            tokens,
+                            requests,
+                        })
+                        .collect();
+                    models.sort_by(|a, b| b.tokens.output.cmp(&a.tokens.output));
                     SessionRow {
                         session_id,
                         title: None, // filled by the reader when the transcript names itself
@@ -329,6 +350,7 @@ where
                         first_ts: first,
                         last_ts: last,
                         active_min: active_minutes(s.ts),
+                        models,
                     }
                 })
                 .collect();

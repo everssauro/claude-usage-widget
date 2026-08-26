@@ -120,15 +120,30 @@ const SORTS = {
   requests: (p) => p.requests,
   active: (p) => p.active_min,
   sessions: (p) => p.sessions.length,
-  fable: (p) => p._fable,
   cost: (p) => p._cost,
   allocated: (p) => p._share,
 };
 
-function td(text, cls) {
+/// Which model produced a row's tokens is detail, not a column — but it still
+/// has to be answerable. This is what the numbers show on hover.
+function modelTitle(models) {
+  if (!models || !models.length) return "";
+  return models
+    .map((m) => {
+      const t = m.tokens;
+      const short = m.model.replace(/^claude-/, "");
+      return `${short}: ${fmtBig(t.output)} out · ${fmtBig(t.input)} in · ${fmtBig(
+        t.cache_write + t.cache_read,
+      )} cache · ${m.requests} req`;
+    })
+    .join("\n");
+}
+
+function td(text, cls, title) {
   const c = document.createElement("td");
   c.className = cls || "c-num";
   c.textContent = text;
+  if (title) c.title = title;
   return c;
 }
 
@@ -212,14 +227,12 @@ function endDrag() {
   if (over && path) assignProject(path, over);
 }
 
-/// The full path is unreadable in a table cell and starves the NAME of space —
-/// which is how every project once rendered as "h…", "clau…", "cha…". Show the
-/// tail only; the full path stays in the row's tooltip.
-function shortPath(path) {
-  let t = path;
-  if (t.startsWith("/Users/")) t = "~/" + t.split("/").slice(3).join("/");
-  const parent = t.split("/").slice(0, -1); // drop the leaf: it's already the name
-  return parent.length > 3 ? "…/" + parent.slice(-2).join("/") : parent.join("/");
+/// Full path, with $HOME as "~". Kept whole now that the Group column is gone:
+/// the repo is what identifies a row, and truncating it to "…/dev/Ton" made
+/// sibling projects indistinguishable. CSS clips from the LEFT when it must, so
+/// the tail — the part that identifies the repo — always survives.
+function homePath(path) {
+  return path.startsWith("/Users/") ? "~/" + path.split("/").slice(3).join("/") : path;
 }
 
 function projectRow(p) {
@@ -237,23 +250,23 @@ function projectRow(p) {
   nm.textContent = p.name;
   const pa = document.createElement("span");
   pa.className = "p-path";
-  pa.textContent = shortPath(p.path);
+  pa.textContent = homePath(p.path);
   wrap.append(tw, nm, pa);
   name.append(wrap);
   name.title = p.path;
 
   tr.dataset.group = p._group;
   tr.dataset.path = p.path;
+  const mt = modelTitle(p.models);
   tr.append(
     name,
-    td(fmtMoney(p._alloc)),
-    td("~" + fmtMoney(p._cost), "c-num muted"),
-    td(p._fable ? fmtBig(p._fable) : "—", "c-num credit"),
-    td(fmtBig(p.tokens.output)),
-    td(fmtBig(p.tokens.input)),
-    td(fmtBig(p.tokens.cache_write)),
-    td(fmtBig(p.tokens.cache_read)),
-    td(String(p.requests)),
+    td(fmtMoney(p._alloc), "c-num", mt),
+    td("~" + fmtMoney(p._cost), "c-num muted", mt),
+    td(fmtBig(p.tokens.output), "c-num", mt),
+    td(fmtBig(p.tokens.input), "c-num", mt),
+    td(fmtBig(p.tokens.cache_write), "c-num", mt),
+    td(fmtBig(p.tokens.cache_read), "c-num", mt),
+    td(String(p.requests), "c-num", mt),
     td(fmtMin(p.active_min)),
     td(String(p.sessions.length)),
   );
@@ -273,7 +286,7 @@ function projectRow(p) {
   return tr;
 }
 
-function sessionRow(s) {
+function sessionRow(s, project) {
   const sr = document.createElement("tr");
   sr.className = "s-row";
   const sname = document.createElement("td");
@@ -286,17 +299,22 @@ function sessionRow(s) {
   sub.textContent =
     ` · ${fmtClock(s.last_ts)}` +
     (s.subagent_requests ? ` · +${s.subagent_requests} subagent` : "");
-  sname.append(t, sub);
+  const repo = document.createElement("span");
+  repo.className = "s-repo";
+  repo.textContent = project ? homePath(project.path) : "";
+  sname.append(t, sub, repo);
+  // Full path + the untruncated session id, for when the row isn't enough.
+  sname.title = `${s.title || ""}\n${s.session_id}\n${project ? project.path : ""}`.trim();
+  const mt = modelTitle(s.models);
   sr.append(
     sname,
     td(""),
     td(""),
-    td(""),
-    td(fmtBig(s.tokens.output)),
-    td(fmtBig(s.tokens.input)),
-    td(fmtBig(s.tokens.cache_write)),
-    td(fmtBig(s.tokens.cache_read)),
-    td(String(s.requests)),
+    td(fmtBig(s.tokens.output), "c-num", mt),
+    td(fmtBig(s.tokens.input), "c-num", mt),
+    td(fmtBig(s.tokens.cache_write), "c-num", mt),
+    td(fmtBig(s.tokens.cache_read), "c-num", mt),
+    td(String(s.requests), "c-num", mt),
     td(fmtMin(s.active_min)),
     td(""),
   );
@@ -360,7 +378,6 @@ function groupRow(id, members, collapsed) {
     name,
     td(fmtMoney(sum((p) => p._alloc))),
     td("~" + fmtMoney(sum((p) => p._cost)), "c-num muted"),
-    td(sum((p) => p._fable) ? fmtBig(sum((p) => p._fable)) : "—", "c-num credit"),
     td(fmtBig(sum((p) => p.tokens.output))),
     td(fmtBig(sum((p) => p.tokens.input))),
     td(fmtBig(sum((p) => p.tokens.cache_write))),
@@ -419,7 +436,7 @@ function render() {
     for (const p of members) {
       el.rows.append(projectRow(p));
       if (!state.expandAll && !state.expanded.has(p.path)) continue;
-      for (const s of p.sessions) el.rows.append(sessionRow(s));
+      for (const s of p.sessions) el.rows.append(sessionRow(s, p));
     }
   }
 
@@ -427,7 +444,6 @@ function render() {
   const sum = (f) => projects.reduce((a, p) => a + f(p), 0);
   el.tAllocated.textContent = fmtMoney(sum((p) => p._alloc));
   el.tCost.textContent = "~" + fmtMoney(sum((p) => p._cost));
-  el.tFable.textContent = sum((p) => p._fable) ? fmtBig(sum((p) => p._fable)) : "—";
   el.tOutput.textContent = fmtBig(sum((p) => p.tokens.output));
   el.tInput.textContent = fmtBig(sum((p) => p.tokens.input));
   el.tCacheWrite.textContent = fmtBig(sum((p) => p.tokens.cache_write));
@@ -559,12 +575,9 @@ async function load() {
     // Plan share counts only models that actually consume the plan windows.
     const planOut = (p) =>
       (p.models || []).reduce((a, m) => a + (drawsCredits(m.model) ? 0 : m.tokens.output), 0);
-    const fableOut = (p) =>
-      (p.models || []).reduce((a, m) => a + (drawsCredits(m.model) ? m.tokens.output : 0), 0);
     const totalPlanOut = res.projects.reduce((a, p) => a + planOut(p), 0) || 1;
     for (const p of res.projects) {
       p._cost = estCost(p.models);
-      p._fable = fableOut(p);
       p._share = planOut(p) / totalPlanOut;
       p._alloc = plan * invoiceFraction * p._share;
     }
@@ -593,7 +606,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "content", "rows", "search", "windowSeg", "windowLabel", "refreshBtn", "errMsg",
     "planPrice", "basisLabel", "scanNote", "windowNote",
     "tAllocated", "tCost", "tOutput", "tInput", "tCacheWrite", "tCacheRead",
-    "tRequests", "tActive", "tSessions", "tFable", "newGroupBtn", "groupInput", "expandAllBtn",
+    "tRequests", "tActive", "tSessions", "newGroupBtn", "groupInput", "expandAllBtn",
   ]) {
     el[id] = document.getElementById(id);
   }

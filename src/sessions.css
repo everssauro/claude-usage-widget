@@ -144,7 +144,7 @@ body {
   user-select: none;
   /* Below this the columns crush each other and names truncate to nothing;
      the container scrolls horizontally instead, so resizing stays useful. */
-  min-width: 980px;
+  min-width: 920px;
   border-collapse: collapse;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
@@ -183,7 +183,7 @@ body {
 }
 .grid td.c-name {
   text-align: left;
-  width: 30%;
+  width: 42%;
   max-width: 0; /* let the ellipsis work inside a table cell */
   overflow: hidden;
   text-overflow: ellipsis;
@@ -216,6 +216,10 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Paths must clip from the LEFT: the tail (…/code/bots/sp-bot-comercial) is
+   what identifies the repo, so the usual end-ellipsis throws away the only
+   part worth reading. `direction: rtl` moves the ellipsis to the front;
+   `unicode-bidi: plaintext` keeps the text itself rendering left-to-right. */
 .p-path {
   flex: 1 1 0;
   min-width: 0;
@@ -223,6 +227,18 @@ body {
   font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  text-align: left;
+}
+/* the repo a session belongs to, under its name */
+.s-repo {
+  color: var(--dim);
+  font-size: 10px;
+  margin-left: 8px;
+  direction: rtl;
+  unicode-bidi: plaintext;
 }
 .p-row {
   cursor: pointer;
