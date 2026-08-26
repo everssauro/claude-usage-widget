@@ -565,16 +565,38 @@ async function load() {
     // so "total tokens" mostly measures conversation length, not work done.
     // Fable is excluded — see CREDIT_MODEL.
     const plan = PLANS[localStorage.getItem("cuw-plan")] ?? PLANS.max20;
-    // How much of a real invoice this window represents. For "This month" it is
-    // the whole invoice — allocating all of it by share-so-far answers "if the
-    // month ended now, what would each client's slice be?", which is the actual
-    // billing question. Shorter/longer windows are pro-rata by duration.
-    const windowSecs = res.window_end - res.window_start;
-    const invoiceFraction =
-      state.window === "month" ? 1 : windowSecs / (30 * 86400);
     // Plan share counts only models that actually consume the plan windows.
     const planOut = (p) =>
       (p.models || []).reduce((a, m) => a + (drawsCredits(m.model) ? 0 : m.tokens.output), 0);
+    // How much of a real invoice this window represents.
+    //
+    // This MUST come from a real period. Deriving it from the requested window
+    // was a live bug: "All time" starts at epoch 0, so the fraction came out as
+    // 689 months and the table allocated $137,944 of a $200/mo subscription.
+    // A billing screen that inflates by 689x is worse than no screen.
+    const MONTH_SECS = 30 * 86400;
+    let spanStart = Infinity;
+    let spanEnd = -Infinity;
+    for (const p of res.projects) {
+      for (const sess of p.sessions) {
+        if (sess.first_ts < spanStart) spanStart = sess.first_ts;
+        if (sess.last_ts > spanEnd) spanEnd = sess.last_ts;
+      }
+    }
+    const dataSpan = spanEnd > spanStart ? spanEnd - spanStart : 0;
+
+    let invoiceFraction;
+    if (state.window === "month" || state.window === "lastMonth") {
+      // A calendar month IS one invoice — allocate all of it, so a mid-month
+      // view answers "if the month ended now, what would each slice be?".
+      invoiceFraction = 1;
+    } else if (state.window === "all") {
+      // Every month the archive actually spans, at least one.
+      invoiceFraction = Math.max(1, dataSpan / MONTH_SECS);
+    } else {
+      // 5h / weekly: a genuine slice of one month.
+      invoiceFraction = (res.window_end - res.window_start) / MONTH_SECS;
+    }
     const totalPlanOut = res.projects.reduce((a, p) => a + planOut(p), 0) || 1;
     for (const p of res.projects) {
       p._cost = estCost(p.models);
@@ -583,8 +605,17 @@ async function load() {
     }
     state.data = res;
 
-    el.windowLabel.textContent = `${fmtClock(res.window_start)} → ${fmtClock(res.window_end)}`;
-    el.planPrice.textContent = `$${plan}/mo`;
+    // For All time the requested window starts at epoch 0; show the period the
+    // data actually covers instead of "31 Dec 1969".
+    const labelStart = state.window === "all" && dataSpan ? spanStart : res.window_start;
+    const labelEnd = state.window === "all" && dataSpan ? spanEnd : res.window_end;
+    el.windowLabel.textContent = `${fmtClock(labelStart)} → ${fmtClock(labelEnd)}`;
+    el.planPrice.textContent =
+      invoiceFraction >= 1.05
+        ? `$${plan}/mo × ${invoiceFraction.toFixed(1)} months`
+        : invoiceFraction > 0.95
+          ? `$${plan}/mo`
+          : `$${plan}/mo × ${(invoiceFraction * 100).toFixed(1)}% of a month`;
     const sessCount = res.projects.reduce((a, p) => a + p.sessions.length, 0);
     el.scanNote.textContent = `${sessCount} sessions across ${res.projects.length} projects, ${res.total_requests} requests, ${res.files_scanned} transcripts scanned`;
     // A session open in a pane but idle spends nothing, so it isn't here. Say so:
