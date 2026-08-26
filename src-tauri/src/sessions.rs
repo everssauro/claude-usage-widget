@@ -343,10 +343,14 @@ where
                 })
                 .collect();
             models.sort_by(|a, b| b.tokens.output.cmp(&a.tokens.output));
+            // A session started outside any repo (scheduled/headless runs use
+            // cwd "/") has no basename, and rendered as a bare slash — an
+            // unidentifiable row. Name the condition instead.
             let name = Path::new(&path)
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.clone());
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "(no project)".to_string());
             ProjectRow {
                 path,
                 name,
@@ -425,6 +429,34 @@ fn transcript_title(line: &str) -> Option<String> {
     None
 }
 
+/// First line of the first user message, as a last-resort session label.
+/// Without it an unnamed session shows only a UUID, and answering "which
+/// session is this?" means grepping the archive by hand.
+fn first_user_text(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if v.get("type")?.as_str()? != "user" {
+        return None;
+    }
+    let content = v.get("message")?.get("content")?;
+    let raw = match content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(blocks) => blocks
+            .iter()
+            .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+            .and_then(|b| b.get("text"))
+            .and_then(|t| t.as_str())?
+            .to_string(),
+        _ => return None,
+    };
+    let t = raw.trim();
+    // Skip injected system reminders and command wrappers — not what the user typed.
+    if t.is_empty() || t.starts_with('<') {
+        return None;
+    }
+    let line1 = t.lines().find(|l| !l.trim().is_empty())?.trim();
+    Some(line1.chars().take(70).collect())
+}
+
 /// Walk up from `cwd` to the enclosing git repository root. Falls back to `cwd`
 /// itself when there is no repo (or the directory is gone).
 fn git_root(cwd: &str) -> String {
@@ -467,10 +499,16 @@ fn scan(window_start: f64, window_end: f64) -> SessionsView {
             // A single unreadable line must not truncate the rest of the file:
             // `break` here would silently drop every session after it.
             let Ok(line) = line else { continue };
-            if i < 20 {
-                if let Some(t) = transcript_title(&line) {
-                    if let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) {
-                        titles.entry(stem).or_insert(t);
+            if i < 60 {
+                let named = transcript_title(&line);
+                // The transcript's own name wins; the first prompt is the fallback.
+                if let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) {
+                    if let Some(t) = named {
+                        titles.insert(stem, t);
+                    } else if !titles.contains_key(&stem) {
+                        if let Some(t) = first_user_text(&line) {
+                            titles.insert(stem, t);
+                        }
                     }
                 }
             }
