@@ -138,6 +138,10 @@ body {
 }
 .grid {
   width: 100%;
+  /* Rows are interactive (click to expand, drag to group) — selecting their
+     text is never the intent and fights every gesture. The footer notes stay
+     selectable, since those are meant to be quoted. */
+  user-select: none;
   /* Below this the columns crush each other and names truncate to nothing;
      the container scrolls horizontally instead, so resizing stays useful. */
   min-width: 980px;
@@ -293,6 +297,7 @@ body {
 
 /* ---- footer notes (part of the artefact, not chrome) ---- */
 .notes {
+  user-select: text;
   flex: none;
   padding: 10px 18px 13px;
   border-top: 1px solid var(--track);

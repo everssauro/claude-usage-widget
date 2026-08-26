@@ -145,6 +145,11 @@ const drag = { path: null, name: "", x: 0, y: 0, active: false, ghost: null, ove
 
 function beginDrag(e, p) {
   if (e.button !== 0 || e.target.closest("button, input, select")) return;
+  // Stop the native text selection BEFORE it starts. Waiting for the 5px
+  // threshold is too late: macOS begins selecting on the very first mousemove,
+  // and turning off user-select mid-gesture doesn't undo a selection already
+  // in progress.
+  e.preventDefault();
   drag.path = p.path;
   drag.name = p.name;
   drag.x = e.clientX;
@@ -156,6 +161,8 @@ function beginDrag(e, p) {
 
 function startVisualDrag() {
   drag.active = true;
+  window.getSelection()?.removeAllRanges(); // belt and braces
+
   document.body.classList.add("dragging");
   const g = document.createElement("div");
   g.className = "drag-ghost";
