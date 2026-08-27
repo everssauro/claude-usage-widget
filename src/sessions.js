@@ -34,22 +34,53 @@ function windowBounds(name, usage) {
   return [end - w.secs, end];
 }
 
-// $/M tokens, applied to OUR exact token counts. Deliberately local constants
-// rather than ccusage's figure: that one comes from a third-party price table
-// fetched at runtime, and returns $0.00 offline (measured: $342.93 online vs
-// $0.00 with --offline on identical data). Cache reads bill at ~10% of input,
-// cache writes at ~125%.
-const RATES = {
-  opus: { input: 15, output: 75 },
+// $/M tokens, applied to OUR exact token counts. Deliberately local rather
+// than ccusage's figure: that one is fetched from a third-party table at
+// runtime and returns $0.00 offline (measured: $342.93 online vs $0.00 with
+// --offline on identical data).
+//
+// Defaults are the prices the official Claude Code client states for each
+// model ("$10/$50 per MTok" for Fable, "$5/$25" for Opus 5 / 4.8, "$3/$15"
+// sticker for Sonnet 5, $1/$5 for Haiku 4.5), not guesses. Editable, because a
+// number used to justify a charge should be one you set and can defend — and
+// because these change.
+const DEFAULT_RATES = {
+  fable: { input: 10, output: 50 },
+  opus: { input: 5, output: 25 },
   sonnet: { input: 3, output: 15 },
   haiku: { input: 1, output: 5 },
 };
-const rateFor = (model) => {
+const RATE_FAMILIES = [
+  ["fable", "Fable / Mythos"],
+  ["opus", "Opus"],
+  ["sonnet", "Sonnet"],
+  ["haiku", "Haiku"],
+];
+
+function loadRates() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("cuw-rates") || "{}");
+    const out = {};
+    for (const [k, v] of Object.entries(DEFAULT_RATES)) {
+      out[k] = {
+        input: Number(saved?.[k]?.input) >= 0 ? Number(saved[k].input) : v.input,
+        output: Number(saved?.[k]?.output) >= 0 ? Number(saved[k].output) : v.output,
+      };
+    }
+    return out;
+  } catch {
+    return structuredClone(DEFAULT_RATES);
+  }
+}
+
+const familyOf = (model) => {
   const m = (model || "").toLowerCase();
-  if (m.includes("haiku")) return RATES.haiku;
-  if (m.includes("sonnet")) return RATES.sonnet;
-  return RATES.opus; // opus / fable / unknown — the expensive assumption, on purpose
+  if (/fable|mythos/.test(m)) return "fable";
+  if (m.includes("haiku")) return "haiku";
+  if (m.includes("sonnet")) return "sonnet";
+  return "opus"; // opus and anything unrecognised
 };
+const rateFor = (model) => state.rates[familyOf(model)];
 
 // Subscription price by plan, mirroring the widget's settings.
 const PLANS = { pro: 20, max5: 100, max20: 200 };
@@ -68,6 +99,7 @@ const el = {};
 const state = {
   // { groups: [{id,name}], projects: {path: groupId} }
   groups: { groups: [], projects: {} },
+  rates: null, // $/M per model family (loadRates)
   window: "current",
   sort: "output",
   filter: "",
@@ -321,7 +353,7 @@ function sessionRow(s, project) {
   return sr;
 }
 
-/// A group's own row: the number you read when asking "what did SlimPass cost
+/// A group's own row: the number you read when asking "what did this client cost
 /// me this month". Totals SUM across projects; active time is deliberately NOT
 /// summed here (concurrent projects would report more hours than elapsed) —
 /// only the grand total unions, so per-group time is left blank rather than
@@ -407,7 +439,11 @@ function render() {
   // Resolve membership HERE, not at load time: assigning a project changes the
   // mapping without refetching, and reading a stale `_group` was why picking a
   // group saved to disk but left the row sitting in its old band.
-  for (const p of projects) p._group = state.groups.projects[p.path] || UNGROUPED;
+  for (const p of projects) {
+    p._group = state.groups.projects[p.path] || UNGROUPED;
+    // Recomputed here, not at load: editing a rate must repaint without a rescan.
+    p._cost = estCost(p.models);
+  }
 
   // Bucket by group. Ungrouped always sits last: it's the inbox, not a client.
   const buckets = new Map();
@@ -461,12 +497,45 @@ function render() {
 }
 
 // ---------------------------------------------------------------------------
-// Groups — user-named folders ("SlimPass", "Ton", "Saggezza") over projects.
+// Groups — user-named folders ("Acme", "Personal", …) over projects.
 // Assignment is at PROJECT level on purpose: sessions are numerous and
 // ephemeral, projects are few and stable, and every session of a project
 // inherits its folder. Persisted to disk (groups.json) via Rust, not
 // localStorage — this mapping is what turns folders into who-owes-what.
 // ---------------------------------------------------------------------------
+function renderRates() {
+  el.ratesRows.replaceChildren();
+  for (const [key, label] of RATE_FAMILIES) {
+    const row = document.createElement("div");
+    row.className = "rate-row";
+    const name = document.createElement("span");
+    name.className = "rate-name";
+    name.textContent = label;
+    row.append(name);
+    for (const side of ["input", "output"]) {
+      const wrap = document.createElement("label");
+      wrap.className = "rate-field";
+      const cap = document.createElement("span");
+      cap.textContent = side === "input" ? "in" : "out";
+      const inp = document.createElement("input");
+      inp.type = "number";
+      inp.min = "0";
+      inp.step = "0.5";
+      inp.value = state.rates[key][side];
+      inp.addEventListener("change", () => {
+        const v = Number(inp.value);
+        if (!(v >= 0)) return;
+        state.rates[key][side] = v;
+        localStorage.setItem("cuw-rates", JSON.stringify(state.rates));
+        render(); // cost is recomputed at render, so this repaints instantly
+      });
+      wrap.append(cap, inp);
+      row.append(wrap);
+    }
+    el.ratesRows.append(row);
+  }
+}
+
 async function loadGroups() {
   try {
     const raw = await invoke("get_groups");
@@ -500,7 +569,7 @@ function openGroupInput(edit, value = "") {
   el.groupInput.hidden = false;
   el.groupInput.value = value;
   el.groupInput.placeholder =
-    edit.mode === "rename" ? "New name…" : "Group name (SlimPass, Ton, Saggezza…)";
+    edit.mode === "rename" ? "New name…" : "Group name (a client, a company, Personal…)";
   el.groupInput.focus();
   el.groupInput.select();
 }
@@ -599,7 +668,6 @@ async function load() {
     }
     const totalPlanOut = res.projects.reduce((a, p) => a + planOut(p), 0) || 1;
     for (const p of res.projects) {
-      p._cost = estCost(p.models);
       p._share = planOut(p) / totalPlanOut;
       p._alloc = plan * invoiceFraction * p._share;
     }
@@ -637,7 +705,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "content", "rows", "search", "windowSeg", "windowLabel", "refreshBtn", "errMsg",
     "planPrice", "basisLabel", "scanNote", "windowNote",
     "tAllocated", "tCost", "tOutput", "tInput", "tCacheWrite", "tCacheRead",
-    "tRequests", "tActive", "tSessions", "newGroupBtn", "groupInput", "expandAllBtn",
+    "tRequests", "tActive", "tSessions", "newGroupBtn", "groupInput", "expandAllBtn", "ratesBtn", "ratesPanel", "ratesRows", "ratesReset",
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -678,6 +746,17 @@ window.addEventListener("DOMContentLoaded", () => {
     state.filter = el.search.value;
     render();
   });
+  el.ratesBtn.addEventListener("click", () => {
+    el.ratesPanel.hidden = !el.ratesPanel.hidden;
+    el.ratesBtn.classList.toggle("on", !el.ratesPanel.hidden);
+    if (!el.ratesPanel.hidden) renderRates();
+  });
+  el.ratesReset.addEventListener("click", () => {
+    localStorage.removeItem("cuw-rates");
+    state.rates = loadRates();
+    renderRates();
+    render();
+  });
   el.refreshBtn.addEventListener("click", load);
   // The table is project-first, so sessions hide until a row is expanded —
   // which reads as "my sessions are missing". One toggle shows them all.
@@ -711,5 +790,6 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  state.rates = loadRates();
   loadGroups().then(load);
 });

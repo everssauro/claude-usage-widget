@@ -901,15 +901,17 @@ mod tests {
 
     #[test]
     fn parses_the_real_oauth_usage_payload() {
-        // Captured live from GET /api/oauth/usage.
+        // Shape captured from a live GET /api/oauth/usage; the numbers are
+        // synthetic — the fixture pins the payload's structure, not anyone's
+        // real usage or credit balance.
         let u = parse_usage_api(
             include_str!("../tests/fixtures/oauth-usage.json"),
             0.0, // epoch → resets are far in the future, so reset_min > 0
         )
         .expect("should parse");
 
-        assert_eq!(u.current_pct, 41);
-        assert_eq!(u.weekly_pct, 54);
+        assert_eq!(u.current_pct, 40);
+        assert_eq!(u.weekly_pct, 50);
         assert_eq!(u.status, "allowed");
 
         // The whole point: a model-scoped window the headers never exposed.
@@ -918,7 +920,7 @@ mod tests {
             .iter()
             .find(|l| l.label == "Fable")
             .expect("Fable window must survive parsing");
-        assert_eq!(fable.pct, 84);
+        assert_eq!(fable.pct, 80);
         assert_eq!(fable.kind, "weekly_scoped");
         assert_eq!(fable.severity, "warning");
         assert!(fable.active);
@@ -928,10 +930,10 @@ mod tests {
 
         // Credits are real money, in the account's own currency.
         assert!(u.spend.present);
-        assert_eq!(u.spend.used_minor, 1050);
+        assert_eq!(u.spend.used_minor, 500);
         assert_eq!(u.spend.limit_minor, 2000);
-        assert_eq!(u.spend.currency, "BRL");
-        assert_eq!(u.spend.pct, 52);
+        assert_eq!(u.spend.currency, "USD");
+        assert_eq!(u.spend.pct, 25);
         assert!(!u.spend.enabled);
         assert_eq!(u.spend.disabled_reason, "out_of_credits");
     }

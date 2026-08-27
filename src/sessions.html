@@ -27,8 +27,17 @@
            runJavaScriptTextInputPanel, so prompt() silently returns null in this
            webview (and alert/confirm are equally absent). -->
       <input id="groupInput" class="group-input" placeholder="Group name…" hidden />
+      <button id="ratesBtn" class="ghost-btn" title="edit $/M rates used for ~API-equiv">$&nbsp;Rates</button>
       <button id="refreshBtn" class="ghost-btn" title="rescan">↻</button>
     </header>
+
+    <!-- Rates behind a toggle: they explain the ~API-equiv column, and a number
+         used to justify a charge should be one you set. -->
+    <section id="ratesPanel" class="rates" hidden>
+      <span class="rates-lead">$ per million tokens · used only for <strong class="muted">~API-equiv</strong></span>
+      <div id="ratesRows" class="rates-rows"></div>
+      <button id="ratesReset" class="mini-btn">reset to published prices</button>
+    </section>
 
     <main id="content" class="content" data-state="loading">
       <table class="grid">

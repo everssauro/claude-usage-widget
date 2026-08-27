@@ -356,7 +356,7 @@ body {
   flex: none;
 }
 
-/* ---- groups (user-named folders: SlimPass, Ton, Saggezza…) ---- */
+/* ---- groups (user-named folders: a client, a company, Personal…) ---- */
 /* Projects are moved by dragging the row onto a group band — that replaced a
    whole column, which is width this table doesn't have to spare. */
 .p-row {
@@ -437,4 +437,58 @@ body.dragging * {
 /* Fable spends credits, not the plan — visually distinct from plan columns. */
 .credit {
   color: var(--accent);
+}
+
+/* ---- $/M rates (explain the ~API-equiv column) ---- */
+.rates {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--track);
+  background: var(--panel);
+}
+.rates[hidden] {
+  display: none;
+}
+.rates-lead {
+  font-size: 11px;
+  color: var(--dim);
+}
+.rates-rows {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.rate-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rate-name {
+  font-size: 11.5px;
+  min-width: 84px;
+}
+.rate-field {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.rate-field input {
+  width: 52px;
+  background: var(--bg);
+  border: 1px solid var(--track);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 5px;
+  outline: none;
+}
+.rate-field input:focus {
+  border-color: var(--accent);
 }

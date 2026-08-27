@@ -567,7 +567,7 @@ fn scan(window_start: f64, window_end: f64) -> SessionsView {
 }
 
 // ---------------------------------------------------------------------------
-// Groups — user-named folders over projects/sessions ("SlimPass", "Ton", …).
+// Groups — user-named folders over projects/sessions ("Acme", "Personal", …).
 //
 // Stored as a plain JSON blob next to `window.json` rather than in the webview's
 // localStorage: this is the mapping that turns raw folders into who-owes-what,
