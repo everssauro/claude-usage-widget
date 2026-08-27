@@ -1,6 +1,8 @@
 # Claude Usage Widget
 
-A tiny always-on-top **macOS desktop widget** for your live **Claude Code subscription usage** — Current (5h) + Weekly (7d) limits at a glance, with an animated Clawd mascot. A software take on the [Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter) desk dashboard.
+A tiny always-on-top **macOS desktop widget** for your live **Claude Code subscription usage** — every limit Anthropic reports at a glance (5h, weekly, and **per-model windows like Fable's**), plus usage credits in real money, with an animated Clawd mascot. A software take on the [Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter) desk dashboard.
+
+It also opens a **per-project / per-session breakdown** so you can see *where* your usage went — and group projects into named folders (a client, a company, personal work) to find out who spent what.
 
 ![compact](docs/screenshots/compact.png) ![expanded](docs/screenshots/info-expanded.png)
 
@@ -37,17 +39,34 @@ Update later: `git pull && npm run tauri build`.
 
 ## Features
 
-- **Current (5h) + Weekly (7d) usage %** with heat bars, reset timers (and reset clock time), and an **ETA-to-limit** ("limit in 1h 12m") + throttle warning.
-- **⤢ expand** → cost / burn rate / projected cost / models / tokens / cache-hit % (via [`ccusage`](https://github.com/ryoppippi/ccusage)) and a **subscription-vs-API-equivalent** value comparison.
-- **📌 PiP mode** — floats on top, on every Space, over fullscreen apps (like a video PiP). Toggle off for a normal window.
-- **Click the Clawd mascot** → big idle creature; click again to cycle its 13 animations.
-- **⚙ settings** — dark / light (Claude palette) theme, 80%-usage notification toggle, plan selector.
-- Drag anywhere; remembers its position. **80% macOS notification** so you don't blow your block.
+**The widget**
+
+- **Every window Anthropic reports**, rendered generically: the 5h block, the weekly limit, and **model-scoped windows** (Fable has its own weekly bucket) — a new one appears without a code change.
+- **Alert-zone bars**: colour signals state only (safe / amber ≥75% / red ≥90%); the *length* carries the magnitude, and the bound number takes the zone hue so it reads without colour.
+- **The binding limit is marked** using Anthropic's own `is_active`, not a guess — exactly one meter ever carries it.
+- **Usage credits in real money**, in your account's currency, and only when they're actually spendable: showing "52% used" of a spend cap while you're out of credits reads as "half left" when the answer is "none".
+- **ETA-to-limit** ("limit in 1h 12m"), a **▲ %/h trend**, and a **blocked takeover** (red card, sleeping Clawd) when a 5h *or weekly* limit rejects you.
+- **⤢ expand** → time-to-limit, cost / burn / projected / models / tokens / cache-hit % (via [`ccusage`](https://github.com/ryoppippi/ccusage)), credits.
+- **📌 PiP mode** — floats on top, on every Space, over fullscreen apps. **Glass effect** (native macOS vibrancy) optional.
+- **Click the Clawd mascot** → big idle creature; click again to cycle its 13 animations. Its mood follows your **burn rate**, not your absolute %.
+- Drag anywhere; remembers its position — and **returns to it when a display wakes**, instead of being left wherever macOS dumped it.
+- **⚙ settings** — dark/light theme, glass on/off, notifications (80% / 95% / weekly), plan.
+
+**☰ Sessions window** (a separate, normal window)
+
+- **Per-project and per-session usage** — tokens (input / output / cache), requests, active time, session count.
+- **Four periods**: current 5h, weekly, this month, last month, all time. The 5h and weekly windows are anchored on Anthropic's own reset timestamps, so the table and the widget's bars can never disagree.
+- **Named groups** — drag a project row onto a group band to file it under a client or a company; the band totals answer "what did this cost me".
+- **Share of plan** — your subscription allocated by each project's measured share. It's arithmetic on a real invoice, not a per-project charge.
+- **~API-equivalent** — what those tokens would cost at public API prices, clearly marked as an estimate, with **editable $/M rates**.
+- Hover any number for the **per-model split**; hover a row for its full repo path.
 
 ## How it works
 
-- **Usage %** — reads your Claude Code OAuth token (macOS Keychain `Claude Code-credentials`, or the widget's own login) and makes one minimal `/v1/messages` call, reading the `anthropic-ratelimit-unified-*` response headers. Subscription auth, not API-billed.
-- **Cost panel** — runs `ccusage@14` against your local `~/.claude` transcripts (offline, only while the panel is open). Needs `node`/`npx` available.
+- **Usage** — reads your Claude Code OAuth token (macOS Keychain `Claude Code-credentials`, or the widget's own login) and calls `GET /api/oauth/usage`, the same undocumented endpoint the official client uses. It returns a generic `limits[]` array (session / weekly / model-scoped) plus credits as real money. Because it's a **GET**, polling no longer spends the quota it measures. If that endpoint ever disappears it falls back to the old `anthropic-ratelimit-unified-*` response headers. Subscription auth, not API-billed.
+- **Per-project breakdown** — reads Claude Code's own JSONL transcripts in `~/.claude/projects` directly, deduplicating on `(message.id, requestId)` globally and attributing each session to its **git root**. It reconciles with `ccusage` to within 0.07% and is ~10x faster, because it only touches files that could fall in the window.
+- **Cost panel** — runs `ccusage@14` against your local transcripts (offline, only while the panel is open, on a 5-minute cadence behind a cache and a kill deadline). Needs `node`/`npx` available.
+- **Nothing leaves your machine** beyond the usage call to Anthropic. Groups live in `groups.json` next to the window position.
 
 ## Credit
 
@@ -59,5 +78,8 @@ This is a software reimplementation of **[HermannBjorgvin/Clawdmeter](https://gi
 
 ```bash
 npm run tauri dev                                  # run with hot reload
-cargo test --manifest-path src-tauri/Cargo.toml    # parser/auth unit tests (the gate)
+cargo test --manifest-path src-tauri/Cargo.toml    # 33 unit tests — the gate
+
+# reconcile the transcript aggregator against ccusage on real data
+cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture reconcile
 ```
