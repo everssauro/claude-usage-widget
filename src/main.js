@@ -123,7 +123,7 @@ const el = {};
 function cache() {
   for (const id of [
     "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
-    "settingsBtn", "sessionsBtn", "themeSeg", "planSeg", "notifToggle", "glassToggle", "sSub", "sBlock", "sMonth", "sValue",
+    "settingsBtn", "sessionsBtn", "themeSeg", "planSeg", "notifToggle", "glassToggle", "anchorToggle", "dockToggle", "sSub", "sBlock", "sMonth", "sValue",
     "curMeter", "curPct", "curBar", "curReset", "curTrend",
     "wkMeter", "wkPct", "wkBar", "wkReset",
     "crMeter", "crPct", "crBar", "crNote", "scopedMeters",
@@ -911,6 +911,36 @@ window.addEventListener("DOMContentLoaded", () => {
   bindSeg(el.themeSeg, "themeVal", applyTheme);
   bindSeg(el.planSeg, "plan", setPlan);
   el.notifToggle.addEventListener("click", () => applyNotif(!notifEnabled));
+  // --- menu-bar (tray) preferences ---------------------------------------
+  // Stored by Rust in tray.json, not localStorage: the tray reads them before
+  // any webview exists, and "hide the Dock icon" has to survive a cold start.
+  invoke("tray_prefs")
+    .then((p) => {
+      el.anchorToggle.setAttribute("aria-checked", p.anchored ? "true" : "false");
+      el.dockToggle.setAttribute("aria-checked", p.hide_dock ? "true" : "false");
+    })
+    .catch(() => {});
+  el.anchorToggle.addEventListener("click", () => {
+    const on = el.anchorToggle.getAttribute("aria-checked") !== "true";
+    el.anchorToggle.setAttribute("aria-checked", on ? "true" : "false");
+    invoke("set_tray_anchored", { anchored: on }).catch(() => {});
+  });
+  el.dockToggle.addEventListener("click", () => {
+    const on = el.dockToggle.getAttribute("aria-checked") !== "true";
+    el.dockToggle.setAttribute("aria-checked", on ? "true" : "false");
+    invoke("set_hide_dock", { hide: on }).catch(() => {});
+  });
+
+  // The tray menu drives the same views the card's own buttons do — the pin
+  // button and the menu must never disagree about the pinned state.
+  const { listen } = window.__TAURI__.event;
+  listen("tray://settings", () => setView(view === "settings" ? "compact" : "settings"));
+  listen("tray://pinned", (e) => {
+    pinned = !!e.payload;
+    el.pinBtn.classList.toggle("active", pinned);
+    pref.setBool("cuw-pinned", pinned);
+  });
+
   el.glassToggle.addEventListener("click", () => applyGlass(!glassEnabled));
   // Account / connect flow
   el.connectBtn.addEventListener("click", startConnect); // from the error overlay

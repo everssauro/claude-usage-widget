@@ -1,12 +1,13 @@
 mod auth;
 mod sessions;
+mod tray;
 mod usage;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, LogicalPosition, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WindowEvent};
 
 /// Compute the top-right position of the macOS main display in **logical**
 /// points — `set_position` expects logical units, and mixing in physical pixels
@@ -302,7 +303,7 @@ unsafe fn desired_pip(ns_window: *mut objc::runtime::Object, on: bool) -> (u64, 
 /// event fires on the very click that makes the panel key — i.e. the click the
 /// user is trying to drag with — so writing window state unconditionally there
 /// mutates the window mid-gesture. Reading first makes the common case a no-op.
-fn reassert_pip_if_drifted(window: &tauri::WebviewWindow, on: bool) {
+fn reassert_pip_if_drifted_window(window: &tauri::WebviewWindow, on: bool) {
     #[cfg(target_os = "macos")]
     {
         use objc::{msg_send, runtime::Object, sel, sel_impl};
@@ -530,6 +531,69 @@ fn sign_out() {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+
+// ---------------------------------------------------------------------------
+// Bridges the tray calls into. Kept here because they need `Pinned`/`PosState`,
+// which the tray module deliberately doesn't know about.
+// ---------------------------------------------------------------------------
+
+/// Accept wherever the window is RIGHT NOW as the position to defend.
+/// Without this the watcher treats an anchored placement as a system relocation
+/// and yanks the window back to the last hand-dragged spot moments after it
+/// appears — the two features would fight each other on screen.
+pub fn adopt_current_position(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(phys) = window.outer_position() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let pos = phys.to_logical::<f64>(scale);
+    if let Ok(mut saver) = app.state::<PosState>().0.lock() {
+        saver.desired = Some(pos);
+        saver.restore_after = None;
+    }
+    write_position(app, pos);
+}
+
+pub fn reassert_pip_if_drifted(app: &AppHandle) {
+    let on = *app.state::<Pinned>().0.lock().unwrap();
+    if let Some(window) = app.get_webview_window("main") {
+        reassert_pip_if_drifted_window(&window, on);
+    }
+}
+
+pub fn toggle_pin_from_tray(app: &AppHandle) {
+    let state = app.state::<Pinned>();
+    let on = {
+        let mut p = state.0.lock().unwrap();
+        *p = !*p;
+        *p
+    };
+    if let Some(window) = app.get_webview_window("main") {
+        apply_pip(&window, on);
+        // The card's pin button has to agree with the menu.
+        let _ = window.emit("tray://pinned", on);
+    }
+}
+
+pub fn open_sessions_from_tray(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = open_sessions(app).await {
+            eprintln!("tray: open sessions failed: {e}");
+        }
+    });
+}
+
+pub fn show_settings_from_tray(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.emit("tray://settings", ());
+    }
+}
+
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
     #[cfg(target_os = "macos")]
@@ -537,6 +601,7 @@ pub fn run() {
 
     builder
         .manage(Pinned(Mutex::new(true)))
+        .manage(tray::TrayState(Mutex::new(tray::TrayPrefs { anchored: false, hide_dock: false })))
         .manage(PosState(Mutex::new(PosSaver {
             pending: None,
             last_write: Instant::now(),
@@ -548,6 +613,18 @@ pub fn run() {
             if let Ok(dir) = app.path().app_config_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 auth::set_config_dir(dir); // auth.json lives next to window.json
+            }
+            // Menu-bar icon: a second door to the widget, not a replacement.
+            let prefs = tray::load_prefs(app.handle());
+            let hide_dock = prefs.hide_dock;
+            *app.state::<tray::TrayState>().0.lock().unwrap() = prefs;
+            if let Err(e) = tray::build(app.handle()) {
+                // Not fatal: the widget still works as a plain window, and
+                // failing to launch over a missing menu-bar icon would be worse
+                // than launching without one.
+                eprintln!("tray icon unavailable: {e}");
+            } else if hide_dock {
+                let _ = tray::set_hide_dock(app.handle().clone(), true);
             }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -614,7 +691,7 @@ pub fn run() {
                     let app = window.app_handle();
                     let pinned = *app.state::<Pinned>().0.lock().unwrap();
                     if let Some(w) = app.get_webview_window("main") {
-                        reassert_pip_if_drifted(&w, pinned);
+                        reassert_pip_if_drifted_window(&w, pinned);
                     }
                 }
                 _ => {}
@@ -627,6 +704,9 @@ pub fn run() {
             sessions::get_sessions,
             sessions::get_groups,
             sessions::save_groups,
+            tray::set_tray_anchored,
+            tray::set_hide_dock,
+            tray::tray_prefs,
             open_sessions,
             set_pinned,
             set_glass,
