@@ -682,7 +682,18 @@ pub fn run() {
                     let scale = window.scale_factor().unwrap_or(1.0);
                     record_move(window.app_handle(), phys.to_logical::<f64>(scale));
                 }
-                WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+                // Market standard for a menu-bar app: closing hides, quitting is
+                // an explicit menu action. Only ever intercepted while a tray
+                // icon exists to bring the window back — otherwise this would
+                // strand the app with no window, no Dock tile and no icon.
+                WindowEvent::CloseRequested { api, .. } => {
+                    flush_position(window.app_handle());
+                    if tray::tray_alive() && !tray::is_quitting() {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+                WindowEvent::Destroyed => {
                     flush_position(window.app_handle());
                 }
                 // Re-assert PiP when the widget regains focus (macOS can reset the

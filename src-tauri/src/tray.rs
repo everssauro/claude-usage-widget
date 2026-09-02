@@ -9,6 +9,7 @@
 //! appears is the user's choice (`anchored` below), and so is whether the app
 //! keeps a Dock icon.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::{
@@ -25,6 +26,24 @@ pub struct TrayPrefs {
     pub hide_dock: bool,
 }
 pub struct TrayState(pub Mutex<TrayPrefs>);
+
+/// Whether a menu-bar icon actually exists. Closing the window hides it instead
+/// of quitting — the market-standard behaviour — but ONLY when this is true. If
+/// the tray failed to build, hiding would leave an app with no Dock tile, no
+/// window and no icon: unreachable except through Force Quit.
+static TRAY_ALIVE: AtomicBool = AtomicBool::new(false);
+/// Set just before a deliberate exit, so the close handler stops intercepting.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+pub fn tray_alive() -> bool {
+    TRAY_ALIVE.load(Ordering::Relaxed)
+}
+pub fn is_quitting() -> bool {
+    QUITTING.load(Ordering::Relaxed)
+}
+pub fn begin_quit() {
+    QUITTING.store(true, Ordering::Relaxed);
+}
 
 const PREFS_FILE: &str = "tray.json";
 
@@ -170,7 +189,10 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             "pin" => crate::toggle_pin_from_tray(app),
             "sessions" => crate::open_sessions_from_tray(app),
             "settings" => crate::show_settings_from_tray(app),
-            "quit" => app.exit(0),
+            "quit" => {
+                begin_quit();
+                app.exit(0);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -185,5 +207,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
+    TRAY_ALIVE.store(true, Ordering::Relaxed);
     Ok(())
 }
