@@ -267,6 +267,24 @@ function homePath(path) {
   return path.startsWith("/Users/") ? "~/" + path.split("/").slice(3).join("/") : path;
 }
 
+/// The allocation cell, in the widget's language: a bar behind the number whose
+/// LENGTH is the share. Colour is deliberately not used to encode magnitude —
+/// same reasoning as the widget's meters.
+function shareCell(amount, share, title) {
+  const c = document.createElement("td");
+  c.className = "c-num c-share";
+  if (title) c.title = title;
+  const fill = document.createElement("span");
+  fill.className = "share-fill";
+  const pct = Math.min(100, Math.max(0, (share || 0) * 100));
+  fill.style.width = `${pct}%`;
+  const label = document.createElement("span");
+  label.className = "share-label";
+  label.textContent = fmtMoney(amount);
+  c.append(fill, label);
+  return c;
+}
+
 function projectRow(p) {
   const tr = document.createElement("tr");
   tr.className = "p-row";
@@ -292,7 +310,7 @@ function projectRow(p) {
   const mt = modelTitle(p.models);
   tr.append(
     name,
-    td(fmtMoney(p._alloc), "c-num", mt),
+    shareCell(p._alloc, p._share, mt),
     td("~" + fmtMoney(p._cost), "c-num muted", mt),
     td(fmtBig(p.tokens.output), "c-num", mt),
     td(fmtBig(p.tokens.input), "c-num", mt),
@@ -408,7 +426,7 @@ function groupRow(id, members, collapsed) {
 
   tr.append(
     name,
-    td(fmtMoney(sum((p) => p._alloc))),
+    shareCell(sum((p) => p._alloc), sum((p) => p._share)),
     td("~" + fmtMoney(sum((p) => p._cost)), "c-num muted"),
     td(fmtBig(sum((p) => p.tokens.output))),
     td(fmtBig(sum((p) => p.tokens.input))),
@@ -613,7 +631,26 @@ function assignProject(path, groupId) {
   render();
 }
 
+/// Nothing here revalidated: the table loaded once at boot and then sat there.
+/// Leave the window open and every number freezes at the moment you opened it —
+/// which is why projects you had just used still read as zero.
+let loadedAt = 0;
+let loading = false;
+const STALE_AFTER_MS = 60_000;
+
+function markFreshness() {
+  if (!loadedAt) return;
+  const secs = Math.round((Date.now() - loadedAt) / 1000);
+  const label =
+    secs < 45 ? "just now" : secs < 5400 ? `${Math.round(secs / 60)} min ago` : "over an hour ago";
+  el.freshness.textContent = `updated ${label}`;
+  el.freshness.dataset.stale = Date.now() - loadedAt > STALE_AFTER_MS ? "true" : "false";
+}
+
 async function load() {
+  if (loading) return;
+  loading = true;
+  el.refreshBtn.classList.add("spinning");
   el.content.dataset.state = "loading";
   try {
     // Only the limit-anchored windows need the live headers; the calendar ones
@@ -663,8 +700,11 @@ async function load() {
       // Every month the archive actually spans, at least one.
       invoiceFraction = Math.max(1, dataSpan / MONTH_SECS);
     } else {
-      // 5h / weekly: a genuine slice of one month.
-      invoiceFraction = (res.window_end - res.window_start) / MONTH_SECS;
+      // 5h / weekly: a genuine slice of one month. Taken from the window's OWN
+      // definition rather than the echoed bounds — deriving it from those is
+      // what once allocated 689 months of subscription, and any bad start value
+      // would bring that class of bug straight back.
+      invoiceFraction = WINDOWS[state.window].secs / MONTH_SECS;
     }
     const totalPlanOut = res.projects.reduce((a, p) => a + planOut(p), 0) || 1;
     for (const p of res.projects) {
@@ -693,10 +733,15 @@ async function load() {
       state.window === "all"
         ? ""
         : "Lists activity in this window — a session that's open but idle doesn't appear. Use All time to see every session.";
+    loadedAt = Date.now();
+    markFreshness();
     render();
   } catch (e) {
     el.errMsg.textContent = String(e);
     el.content.dataset.state = "error";
+  } finally {
+    loading = false;
+    el.refreshBtn.classList.remove("spinning");
   }
 }
 
@@ -705,7 +750,7 @@ window.addEventListener("DOMContentLoaded", () => {
     "content", "rows", "search", "windowSeg", "windowLabel", "refreshBtn", "errMsg",
     "planPrice", "basisLabel", "scanNote", "windowNote",
     "tAllocated", "tCost", "tOutput", "tInput", "tCacheWrite", "tCacheRead",
-    "tRequests", "tActive", "tSessions", "newGroupBtn", "groupInput", "expandAllBtn", "ratesBtn", "ratesPanel", "ratesRows", "ratesReset",
+    "tRequests", "tActive", "tSessions", "newGroupBtn", "groupInput", "expandAllBtn", "ratesBtn", "ratesPanel", "ratesRows", "ratesReset", "freshness",
   ]) {
     el[id] = document.getElementById(id);
   }
@@ -758,6 +803,15 @@ window.addEventListener("DOMContentLoaded", () => {
     render();
   });
   el.refreshBtn.addEventListener("click", load);
+  // Coming back to the window is exactly when the numbers matter again, and it
+  // is the moment a frozen table is most misleading.
+  window.addEventListener("focus", () => {
+    if (Date.now() - loadedAt > STALE_AFTER_MS) load();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && Date.now() - loadedAt > STALE_AFTER_MS) load();
+  });
+  setInterval(markFreshness, 20_000); // the label ages even when nothing reloads
   // The table is project-first, so sessions hide until a row is expanded —
   // which reads as "my sessions are missing". One toggle shows them all.
   el.expandAllBtn.addEventListener("click", () => {

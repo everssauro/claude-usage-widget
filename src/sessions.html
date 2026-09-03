@@ -28,7 +28,8 @@
            webview (and alert/confirm are equally absent). -->
       <input id="groupInput" class="group-input" placeholder="Group name…" hidden />
       <button id="ratesBtn" class="ghost-btn" title="edit $/M rates used for ~API-equiv">$&nbsp;Rates</button>
-      <button id="refreshBtn" class="ghost-btn" title="rescan">↻</button>
+      <span id="freshness" class="freshness" title="how old these numbers are"></span>
+      <button id="refreshBtn" class="ghost-btn refresh" title="re-read the transcripts now">↻&nbsp;Refresh</button>
     </header>
 
     <!-- Rates behind a toggle: they explain the ~API-equiv column, and a number

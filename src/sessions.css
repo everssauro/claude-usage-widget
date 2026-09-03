@@ -479,3 +479,48 @@ body.dragging * {
 .rate-field input:focus {
   border-color: var(--accent);
 }
+
+/* ---- freshness + refresh ---------------------------------------------------
+   The table used to load once and never again, so a number could be an hour old
+   with nothing on screen saying so. */
+.freshness {
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  flex: none;
+}
+.freshness[data-stale="true"] {
+  color: var(--accent);
+}
+.ghost-btn.refresh {
+  border: 1px solid var(--track);
+}
+.ghost-btn.spinning {
+  color: var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* ---- share of plan, in the widget's grammar --------------------------------
+   Bar LENGTH carries the magnitude; colour is left out of it entirely, exactly
+   as in the widget's meters. */
+.c-share {
+  position: relative;
+  isolation: isolate;
+}
+.share-fill {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  z-index: -1;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  min-width: 2px;
+}
+.g-row .share-fill {
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.share-label {
+  position: relative;
+}
