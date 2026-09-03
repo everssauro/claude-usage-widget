@@ -160,6 +160,18 @@ body {
   color: var(--accent); /* pinned (floating on top) */
 }
 
+/* Transient state used only to read the card's natural height (see
+   contentHeight in main.js). Added and removed inside one frame, so it never
+   paints: the browser reflows for the measurement but shows no intermediate
+   layout. */
+.card.measuring {
+  height: auto;
+}
+.card.measuring .meters {
+  flex: 0 0 auto;
+  justify-content: flex-start;
+}
+
 /* ---- meters ---- */
 .meters {
   display: flex;

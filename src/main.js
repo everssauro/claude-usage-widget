@@ -262,19 +262,14 @@ async function resizeWindow(w, h) {
 // window like Fable appears, credits hide when unspendable) and the detail panel
 // grew a row — every guessed constant eventually clipped the bottom off.
 function contentHeight() {
-  const cs = getComputedStyle(el.card);
-  const gap = parseFloat(cs.rowGap || cs.gap) || 0;
-  let h = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-  let n = 0;
-  for (const child of el.card.children) {
-    const s = getComputedStyle(child);
-    // Overlays and creature mode are absolutely positioned over the card —
-    // they don't add to its flow height.
-    if (s.display === "none" || s.position === "absolute") continue;
-    h += child.getBoundingClientRect().height;
-    n++;
-  }
-  return Math.round(h + Math.max(0, n - 1) * gap);
+  // Measure the card's NATURAL height, not its current one. `.meters` has
+  // flex:1, so it stretches to fill whatever the window already is — measuring
+  // in that state reports the height we HAVE, never the height we NEED, and the
+  // window could grow on expand but never shrink back on collapse.
+  el.card.classList.add("measuring");
+  const h = el.card.getBoundingClientRect().height;
+  el.card.classList.remove("measuring");
+  return Math.ceil(h);
 }
 
 function fitWindow() {
