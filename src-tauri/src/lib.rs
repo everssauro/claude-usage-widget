@@ -537,26 +537,6 @@ fn sign_out() {
 // which the tray module deliberately doesn't know about.
 // ---------------------------------------------------------------------------
 
-/// Accept wherever the window is RIGHT NOW as the position to defend.
-/// Without this the watcher treats an anchored placement as a system relocation
-/// and yanks the window back to the last hand-dragged spot moments after it
-/// appears — the two features would fight each other on screen.
-pub fn adopt_current_position(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    let Ok(phys) = window.outer_position() else {
-        return;
-    };
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let pos = phys.to_logical::<f64>(scale);
-    if let Ok(mut saver) = app.state::<PosState>().0.lock() {
-        saver.desired = Some(pos);
-        saver.restore_after = None;
-    }
-    write_position(app, pos);
-}
-
 pub fn reassert_pip_if_drifted(app: &AppHandle) {
     let on = *app.state::<Pinned>().0.lock().unwrap();
     if let Some(window) = app.get_webview_window("main") {
@@ -601,7 +581,6 @@ pub fn run() {
 
     builder
         .manage(Pinned(Mutex::new(true)))
-        .manage(tray::TrayState(Mutex::new(tray::TrayPrefs { anchored: false, hide_dock: false })))
         .manage(PosState(Mutex::new(PosSaver {
             pending: None,
             last_write: Instant::now(),
@@ -614,17 +593,11 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&dir);
                 auth::set_config_dir(dir); // auth.json lives next to window.json
             }
-            // Menu-bar icon: a second door to the widget, not a replacement.
-            let prefs = tray::load_prefs(app.handle());
-            let hide_dock = prefs.hide_dock;
-            *app.state::<tray::TrayState>().0.lock().unwrap() = prefs;
+            // Menu-bar icon. It replaces the Dock tile (see tray::build), so a
+            // failure here has to leave the Dock alone — otherwise the app would
+            // have no window, no tile and no icon.
             if let Err(e) = tray::build(app.handle()) {
-                // Not fatal: the widget still works as a plain window, and
-                // failing to launch over a missing menu-bar icon would be worse
-                // than launching without one.
                 eprintln!("tray icon unavailable: {e}");
-            } else if hide_dock {
-                let _ = tray::set_hide_dock(app.handle().clone(), true);
             }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -715,9 +688,6 @@ pub fn run() {
             sessions::get_sessions,
             sessions::get_groups,
             sessions::save_groups,
-            tray::set_tray_anchored,
-            tray::set_hide_dock,
-            tray::tray_prefs,
             open_sessions,
             set_pinned,
             set_glass,

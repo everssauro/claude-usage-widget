@@ -732,7 +732,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   // Inherit the widget's theme so the two windows don't disagree.
-  document.documentElement.dataset.theme = localStorage.getItem("cuw-theme") || "dark";
+  document.documentElement.dataset.theme = "dark"; // dark only, like the widget
 
   el.windowSeg.addEventListener("click", (e) => {
     const b = e.target.closest(".seg-btn");

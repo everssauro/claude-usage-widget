@@ -26,20 +26,7 @@
   -webkit-font-smoothing: antialiased;
   color: var(--fg);
   color-scheme: dark;
-}
-:root[data-theme="light"] {
-  --bg: #f4f2ec;
-  --panel: #ffffff;
-  --fg: #29281f;
-  --dim: #76746a;
-  --pill-bg: #ebe8df;
-  --track: #e4e1d6;
-  --accent: #bf5d3a;
-  --row-hover: #eceadf;
-  color-scheme: light;
-}
-
-* {
+}* {
   margin: 0;
   padding: 0;
   box-sizing: border-box;

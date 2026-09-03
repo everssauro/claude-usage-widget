@@ -123,7 +123,7 @@ const el = {};
 function cache() {
   for (const id of [
     "card", "mascot", "mascotBig", "pinBtn", "expandBtn", "closeBtn", "creatureBack",
-    "settingsBtn", "sessionsBtn", "themeSeg", "planSeg", "notifToggle", "glassToggle", "anchorToggle", "dockToggle", "sSub", "sBlock", "sMonth", "sValue",
+    "settingsBtn", "sessionsBtn", "planSeg", "notifToggle", "sSub", "sBlock", "sMonth", "sValue",
     "curMeter", "curPct", "curBar", "curReset", "curTrend",
     "wkMeter", "wkPct", "wkBar", "wkReset",
     "crMeter", "crPct", "crBar", "crNote", "scopedMeters",
@@ -339,21 +339,15 @@ async function applyPinned(on) {
 // ---------------------------------------------------------------------------
 // Settings: theme, notifications, plan + cost comparison
 // ---------------------------------------------------------------------------
-let theme = "dark";
 let notifEnabled = true;
-let glassEnabled = false; // native macOS vibrancy; off by default
 let planManual = null; // user-selected plan; null until chosen
 let lastCost = null; // last get_cost active payload
 let monthCost = null; // current month's API-equivalent $ (get_month_cost)
 
 const effectivePlan = () => planManual || "max20";
 
-function applyTheme(t) {
-  theme = t === "light" ? "light" : "dark";
-  document.documentElement.dataset.theme = theme;
-  localStorage.setItem("cuw-theme", theme);
-  setSegActive(el.themeSeg, "themeVal", theme);
-}
+// Dark only. The light palette was never good enough to be worth offering, and
+// a theme nobody picks is a whole second design to keep correct.
 
 function applyNotif(on) {
   notifEnabled = !!on;
@@ -361,16 +355,13 @@ function applyNotif(on) {
   pref.setBool("cuw-notif", notifEnabled);
 }
 
-// Glass = native macOS NSVisualEffectView behind the card (real frosted blur of
-// the desktop). The card CSS goes translucent (data-glass) to reveal it. Off by
-// default; persisted explicitly ("1"/"0", default "0").
-async function applyGlass(on) {
-  glassEnabled = !!on;
-  document.documentElement.dataset.glass = glassEnabled ? "on" : "off";
-  el.glassToggle.setAttribute("aria-checked", glassEnabled ? "true" : "false");
-  localStorage.setItem("cuw-glass", glassEnabled ? "1" : "0");
+// Glass = native macOS NSVisualEffectView behind the card (a real frosted blur
+// of the desktop); the card CSS goes translucent to reveal it. Always on — it's
+// the widget's look now, not a setting.
+async function applyGlass() {
+  document.documentElement.dataset.glass = "on";
   try {
-    await invoke("set_glass", { on: glassEnabled });
+    await invoke("set_glass", { on: true });
   } catch {
     /* headless / non-macOS */
   }
@@ -903,29 +894,8 @@ window.addEventListener("DOMContentLoaded", () => {
   el.creatureBack.addEventListener("click", () => setView(baseBeforeCreature));
   el.closeBtn.addEventListener("click", closeApp);
   el.pinBtn.addEventListener("click", () => applyPinned(!pinned));
-  bindSeg(el.themeSeg, "themeVal", applyTheme);
   bindSeg(el.planSeg, "plan", setPlan);
   el.notifToggle.addEventListener("click", () => applyNotif(!notifEnabled));
-  // --- menu-bar (tray) preferences ---------------------------------------
-  // Stored by Rust in tray.json, not localStorage: the tray reads them before
-  // any webview exists, and "hide the Dock icon" has to survive a cold start.
-  invoke("tray_prefs")
-    .then((p) => {
-      el.anchorToggle.setAttribute("aria-checked", p.anchored ? "true" : "false");
-      el.dockToggle.setAttribute("aria-checked", p.hide_dock ? "true" : "false");
-    })
-    .catch(() => {});
-  el.anchorToggle.addEventListener("click", () => {
-    const on = el.anchorToggle.getAttribute("aria-checked") !== "true";
-    el.anchorToggle.setAttribute("aria-checked", on ? "true" : "false");
-    invoke("set_tray_anchored", { anchored: on }).catch(() => {});
-  });
-  el.dockToggle.addEventListener("click", () => {
-    const on = el.dockToggle.getAttribute("aria-checked") !== "true";
-    el.dockToggle.setAttribute("aria-checked", on ? "true" : "false");
-    invoke("set_hide_dock", { hide: on }).catch(() => {});
-  });
-
   // The tray menu drives the same views the card's own buttons do — the pin
   // button and the menu must never disagree about the pinned state.
   const { listen } = window.__TAURI__.event;
@@ -936,7 +906,6 @@ window.addEventListener("DOMContentLoaded", () => {
     pref.setBool("cuw-pinned", pinned);
   });
 
-  el.glassToggle.addEventListener("click", () => applyGlass(!glassEnabled));
   // Account / connect flow
   el.connectBtn.addEventListener("click", startConnect); // from the error overlay
   el.connectStart.addEventListener("click", startConnect); // re-open browser
@@ -959,9 +928,9 @@ window.addEventListener("DOMContentLoaded", () => {
   bindDrag();
 
   applyPinned(pref.getBool("cuw-pinned")); // default on
-  applyTheme(localStorage.getItem("cuw-theme") || "dark");
+  document.documentElement.dataset.theme = "dark";
   applyNotif(pref.getBool("cuw-notif"));
-  applyGlass(localStorage.getItem("cuw-glass") === "1"); // default off
+  applyGlass();
   // Validate the persisted plan — an unknown key would throw in renderSettings
   // (PLANS[plan].price) and take the whole init path (incl. pollLoop) with it.
   const storedPlan = localStorage.getItem("cuw-plan");

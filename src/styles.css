@@ -291,12 +291,7 @@ body {
 }
 .detail-eta .dv {
   color: var(--accent);
-}
-:root[data-theme="light"] .detail-eta {
-  border-bottom-color: rgba(0, 0, 0, 0.1);
-}
-
-/* ---- footer status ---- */
+}/* ---- footer status ---- */
 .status {
   text-align: center;
   font-size: 13px;
@@ -519,41 +514,13 @@ body {
   margin-left: auto;
   background: var(--pill-bg);
   color: var(--fg);
-}
-
-/* ---- light theme (Claude palette) ---- */
-:root[data-theme="light"] {
-  --bg: #f4f2ec;
-  --panel: #ffffff;
-  --fg: #29281f;
-  --dim: #76746a;
-  --pill-bg: #ebe8df;
-  --track: #e4e1d6;
-  --accent: #bf5d3a;
-  --zone-safe: #4e8a5a;
-  --zone-warn: #b8801c;
-  --zone-danger: #bf4a40;
-}
-:root[data-theme="light"] .card {
-  border-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 10px 30px rgba(60, 50, 30, 0.18);
-}
-:root[data-theme="light"] .set-cost {
-  border-top-color: rgba(0, 0, 0, 0.1);
-}
-
-/* ---- glass mode (native macOS vibrancy blurs the real desktop behind a
+}/* ---- glass mode (native macOS vibrancy blurs the real desktop behind a
    translucent card; toggled in settings, off by default). The card + chips go
    semi-transparent so the NSVisualEffectView shows through. ---- */
 :root[data-glass="on"] {
   --card-bg: rgba(8, 8, 10, 0.05); /* near-clear → almost pure frosted vibrancy */
   --panel: rgba(54, 55, 62, 0.12);
-}
-:root[data-theme="light"][data-glass="on"] {
-  --card-bg: rgba(248, 246, 240, 0.1);
-  --panel: rgba(255, 255, 255, 0.18);
-}
-/* Specular sheen lives in the card BACKGROUND (behind all content, so it never
+}/* Specular sheen lives in the card BACKGROUND (behind all content, so it never
    washes the text) — the top-left light reflection is what the eye reads as glass. */
 :root[data-glass="on"] .card {
   background:
@@ -572,19 +539,7 @@ body {
     linear-gradient(rgba(224, 114, 106, 0.18), rgba(224, 114, 106, 0.18)),
     linear-gradient(157deg, rgba(255, 255, 255, 0.12) 0%, transparent 42%),
     var(--card-bg);
-}
-:root[data-theme="light"][data-glass="on"] .card {
-  background:
-    linear-gradient(157deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.12) 18%, transparent 42%),
-    var(--card-bg);
-  border-color: rgba(255, 255, 255, 0.85);
-  box-shadow:
-    0 14px 34px rgba(60, 50, 30, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.06);
-}
-
-/* ---- data-state overlays (z2 over content; header z3 stays clickable) ---- */
+}/* ---- data-state overlays (z2 over content; header z3 stays clickable) ---- */
 .overlay {
   position: absolute;
   inset: 0;
