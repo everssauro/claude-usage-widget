@@ -69,6 +69,12 @@ pub struct Usage {
     pub limits: Vec<ScopedLimit>,
     /// Credits as real money. Preferred over `credits` (header-derived).
     pub spend: Spend,
+    /// True when this came from the header fallback rather than the usage API.
+    /// That path carries neither model-scoped windows nor money, so an empty
+    /// `limits` there means "this source can't tell", NOT "they don't exist" —
+    /// a distinction the UI has to make, or one failed poll erases Fable from
+    /// the card until the next successful one.
+    pub degraded: bool,
 }
 
 #[derive(Debug, Default, Serialize, PartialEq)]
@@ -227,6 +233,7 @@ pub fn parse_usage_api(json: &str, now_unix: f64) -> Result<Usage, String> {
         credits: Credits::default(), // superseded by `spend` on this path
         spend: spend.unwrap_or_default(),
         limits,
+        degraded: false,
     })
 }
 
@@ -288,6 +295,7 @@ where
         // Headers carry neither the model-scoped windows nor money.
         limits: Vec::new(),
         spend: Spend::default(),
+        degraded: true,
     }
 }
 
@@ -897,6 +905,33 @@ mod tests {
         let c = ccusage_cache().lock().unwrap();
         let (at, _) = c.get(&key).unwrap();
         assert!(at.elapsed() >= CCUSAGE_TTL, "stale entry must expire");
+    }
+
+    /// The header fallback must announce that it CANNOT report scoped windows.
+    /// Without this the UI reads its empty `limits` as "no scoped windows
+    /// exist" and erases the Fable meter on a single failed poll.
+    #[test]
+    fn header_fallback_is_marked_degraded() {
+        let headers = |name: &str| -> Option<String> {
+            Some(match name {
+                "anthropic-ratelimit-unified-5h-utilization" => "9",
+                "anthropic-ratelimit-unified-5h-status" => "allowed",
+                "anthropic-ratelimit-unified-7d-utilization" => "23",
+                _ => return None,
+            }
+            .to_string())
+        };
+        let u = parse_rate_limit(headers, 1_700_000_000.0);
+        assert!(u.degraded, "header path must flag itself as degraded");
+        assert!(u.limits.is_empty(), "headers carry no scoped windows");
+
+        let api = parse_usage_api(
+            include_str!("../tests/fixtures/oauth-usage.json"),
+            1_700_000_000.0,
+        )
+        .expect("fixture parses");
+        assert!(!api.degraded, "the usage API is authoritative");
+        assert!(!api.limits.is_empty());
     }
 
     #[test]

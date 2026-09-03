@@ -673,6 +673,12 @@ function statusLine(u, binding) {
 // tomorrow). Built from the generic `limits[]` array so a new scope shows up
 // without a code change — the headers never carried these at all.
 function renderScoped(u) {
+  // A degraded sample comes from the header fallback, which carries no scoped
+  // windows at all. That means "this source can't tell", not "they're gone" —
+  // wiping the meters on it made Fable vanish mid-session after one failed
+  // poll, and stay gone for up to a slow-cadence cycle. Keep what we know; the
+  // card's stale treatment already says the data isn't fresh.
+  if (u.degraded) return;
   const scoped = (u.limits || []).filter((l) => l.kind === "weekly_scoped" && l.label);
   el.scopedMeters.replaceChildren();
   for (const l of scoped) {
@@ -713,6 +719,7 @@ function fmtMinor(minor, currency, exponent) {
   }
 }
 function renderCredits(u) {
+  if (u.degraded) return; // same reasoning as renderScoped: unknown, not absent
   const s = u.spend || {};
   // ONLY when credits can actually be spent. When they can't, the percentage is
   // a trap: it measures the monthly SPEND CAP consumed, not credit available —
