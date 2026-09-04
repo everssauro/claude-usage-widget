@@ -31,15 +31,66 @@ pub fn begin_quit() {
     QUITTING.store(true, Ordering::Relaxed);
 }
 
+use std::sync::Mutex;
+
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
+    AppHandle, LogicalPosition, Manager,
 };
 
-/// Show or hide the widget, always at the position the user left it in. There
-/// is deliberately no "open under the icon" mode: it fought the position
-/// watcher, and the widget's whole model is that it stays where you put it.
+/// Last known screen rect of the menu-bar icon, in physical pixels, so the
+/// menu's own "Show / Hide" lands in the same place a click on the icon does.
+static LAST_ICON_RECT: Mutex<Option<(f64, f64, f64, f64)>> = Mutex::new(None);
+
+/// Put the widget just below the menu-bar icon, clamped to that icon's screen.
+///
+/// The clamp is the part that matters: the icon can sit at the far right of a
+/// wide display, or on a secondary monitor with negative coordinates, and a
+/// naive centre-under-the-icon puts half the window past the edge — or fully
+/// off-screen, where it can't be dragged back.
+fn place_under_icon(window: &tauri::WebviewWindow, icon: (f64, f64, f64, f64)) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let (ix, iy, iw, ih) = icon;
+    let (ix, iy, iw, ih) = (ix / scale, iy / scale, iw / scale, ih / scale);
+
+    let (win_w, win_h) = window
+        .outer_size()
+        .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
+        .unwrap_or((280.0, 380.0));
+
+    let mut x = ix + iw / 2.0 - win_w / 2.0;
+    let mut y = iy + ih + 6.0;
+
+    // Keep it on the screen the icon belongs to.
+    if let Ok(monitors) = window.available_monitors() {
+        let centre = ix + iw / 2.0;
+        let screen = monitors.iter().find(|m| {
+            let ms = m.scale_factor();
+            let o = m.position().to_logical::<f64>(ms);
+            let z = m.size().to_logical::<f64>(ms);
+            centre >= o.x && centre <= o.x + z.width
+        });
+        if let Some(m) = screen {
+            let ms = m.scale_factor();
+            let o = m.position().to_logical::<f64>(ms);
+            let z = m.size().to_logical::<f64>(ms);
+            const MARGIN: f64 = 8.0;
+            x = x.clamp(o.x + MARGIN, (o.x + z.width - win_w - MARGIN).max(o.x + MARGIN));
+            y = y.min((o.y + z.height - win_h - MARGIN).max(o.y + MARGIN));
+        }
+    }
+    let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
+/// Clicking the icon always brings the widget to the Space and screen you are
+/// looking at, directly under the icon. Leaving it open and dragging it
+/// elsewhere still works — the position only moves when you ask for it through
+/// the icon.
+///
+/// The Space half is not a position problem: `set_position` cannot pull a window
+/// across Spaces. That is handled by the MoveToActiveSpace collection behaviour
+/// (see `desired_pip`), which applies when the window is ordered to the front.
 pub fn toggle_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -48,7 +99,14 @@ pub fn toggle_window(app: &AppHandle) {
         let _ = window.hide();
         return;
     }
+    let icon = *LAST_ICON_RECT.lock().unwrap();
+    if let Some(rect) = icon {
+        place_under_icon(&window, rect);
+    }
     let _ = window.show();
+    let _ = window.set_focus();
+    // The move was deliberate: stop the position watcher from undoing it.
+    crate::adopt_current_position(app);
     crate::reassert_pip_if_drifted(app);
 }
 
@@ -98,9 +156,22 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                rect,
                 ..
             } = event
             {
+                // On macOS this Rect is already physical (tray-icon builds it
+                // with the status window's backingScaleFactor). Converting with
+                // the real scale is right either way: a physical value passes
+                // through untouched, a logical one is scaled correctly.
+                let scale = tray
+                    .app_handle()
+                    .get_webview_window("main")
+                    .and_then(|w| w.scale_factor().ok())
+                    .unwrap_or(1.0);
+                let p = rect.position.to_physical::<f64>(scale);
+                let sz = rect.size.to_physical::<f64>(scale);
+                *LAST_ICON_RECT.lock().unwrap() = Some((p.x, p.y, sz.width, sz.height));
                 toggle_window(tray.app_handle());
             }
         })

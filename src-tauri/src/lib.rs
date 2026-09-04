@@ -280,6 +280,13 @@ fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
 const FULLSCREEN_AUXILIARY: u64 = 1 << 8;
 #[cfg(target_os = "macos")]
 const STATIONARY: u64 = 1 << 4;
+/// `NSWindowCollectionBehaviorCanJoinAllSpaces` — set by tao for PiP.
+const CAN_JOIN_ALL_SPACES: u64 = 1 << 0;
+/// `NSWindowCollectionBehaviorMoveToActiveSpace` — ordering the window to the
+/// front pulls it onto the Space you are looking at, instead of switching you
+/// away to wherever it was left. Mutually exclusive with CanJoinAllSpaces, so
+/// it only applies while unpinned; a pinned window is already on every Space.
+const MOVE_TO_ACTIVE_SPACE: u64 = 1 << 1;
 /// Above fullscreen content — the level real overlay apps use to sit over other
 /// apps' fullscreen Spaces.
 #[cfg(target_os = "macos")]
@@ -293,8 +300,15 @@ const NS_SCREEN_SAVER_WINDOW_LEVEL: i64 = 1000;
 unsafe fn desired_pip(ns_window: *mut objc::runtime::Object, on: bool) -> (u64, i64) {
     use objc::{msg_send, sel, sel_impl};
     let cur: u64 = msg_send![ns_window, collectionBehavior];
+    let base = cur | FULLSCREEN_AUXILIARY | STATIONARY;
     (
-        cur | FULLSCREEN_AUXILIARY | STATIONARY,
+        if on {
+            // Pinned: on every Space already, so MoveToActiveSpace is both
+            // meaningless and illegal alongside CanJoinAllSpaces.
+            (base | CAN_JOIN_ALL_SPACES) & !MOVE_TO_ACTIVE_SPACE
+        } else {
+            (base | MOVE_TO_ACTIVE_SPACE) & !CAN_JOIN_ALL_SPACES
+        },
         if on { NS_SCREEN_SAVER_WINDOW_LEVEL } else { 0 },
     )
 }
@@ -536,6 +550,26 @@ fn sign_out() {
 // Bridges the tray calls into. Kept here because they need `Pinned`/`PosState`,
 // which the tray module deliberately doesn't know about.
 // ---------------------------------------------------------------------------
+
+/// Accept wherever the window is RIGHT NOW as the position to defend. Showing
+/// it under the menu-bar icon is a deliberate move, but the watcher cannot tell
+/// that from a system relocation — without this it yanks the window back to the
+/// last hand-dragged spot within a second of it appearing.
+pub fn adopt_current_position(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(phys) = window.outer_position() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let pos = phys.to_logical::<f64>(scale);
+    if let Ok(mut saver) = app.state::<PosState>().0.lock() {
+        saver.desired = Some(pos);
+        saver.restore_after = None;
+    }
+    write_position(app, pos);
+}
 
 pub fn reassert_pip_if_drifted(app: &AppHandle) {
     let on = *app.state::<Pinned>().0.lock().unwrap();
