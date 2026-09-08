@@ -47,10 +47,11 @@ Update later: `git pull && npm run tauri build`.
 - **Usage credits in real money**, in your account's currency, and only when they're actually spendable: showing "52% used" of a spend cap while you're out of credits reads as "half left" when the answer is "none".
 - **ETA-to-limit** ("limit in 1h 12m"), a **▲ %/h trend**, and a **blocked takeover** (red card, sleeping Clawd) when a 5h *or weekly* limit rejects you.
 - **⤢ expand** → time-to-limit, cost / burn / projected / models / tokens / cache-hit % (via [`ccusage`](https://github.com/ryoppippi/ccusage)), credits.
-- **📌 PiP mode** — floats on top, on every Space, over fullscreen apps. **Glass effect** (native macOS vibrancy) optional.
+- **📌 PiP mode** — floats on top, on every Space, over fullscreen apps. Frosted **glass** throughout (native macOS vibrancy).
 - **Click the Clawd mascot** → big idle creature; click again to cycle its 13 animations. Its mood follows your **burn rate**, not your absolute %.
 - Drag anywhere; remembers its position — and **returns to it when a display wakes**, instead of being left wherever macOS dumped it.
-- **⚙ settings** — dark/light theme, glass on/off, notifications (80% / 95% / weekly), plan.
+- **⚙ settings** — notifications (80% / 95% / weekly) and plan. Dark, glass and no Dock tile are decisions, not options.
+- **Lives in the menu bar** — no Dock tile. Click the icon to show or hide it, and it comes to whichever Space and screen you're on, right under the icon. Right-click for pin / sessions / settings / quit. **✕** hides; quitting is a menu item.
 
 **☰ Sessions window** (a separate, normal window)
 
