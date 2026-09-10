@@ -11,13 +11,23 @@
 //!     bars use (`unified-{5h,7d}-reset`), so the table and the bars agree.
 //!  3. A run costs ~9.5s wall because it rescans the whole archive every time.
 //!     Reading the mtime-filtered slice directly measured ~1s in a Python
-//!     prototype (Rust is faster still) and reconciled with ccusage to 0.07%.
+//!     prototype (Rust is faster still) and reconciled with ccusage to 0.07%
+//!     (input and cache still match it exactly; output is deliberately higher
+//!     — see the dedup rules below).
 //!
 //! CORRECTNESS RULES THAT ARE NOT OPTIONAL (each was measured going wrong):
 //!  * DEDUP IS GLOBAL. The same assistant message appears in several files
 //!    (2.3x on a main session, 4.1x on a subagent file). Deduping per file
 //!    inflated totals by 8.19% and doubled one project that is reachable
 //!    through a symlinked directory. Key = `(message.id, requestId)`.
+//!  * FIRST-WINS LOSES OUTPUT. Within one file a streamed message is written
+//!    once per content block, and only the last line carries the real
+//!    `output_tokens` — the early ones hold the `message_start` snapshot (1–3).
+//!    Keeping the first line lost 25.2% of all output tokens on this archive;
+//!    the most complete snapshot wins instead (`Dedup`). ccusage@14 has the
+//!    same first-wins policy, which is why the 0.07% reconciliation never
+//!    caught it: our output now legitimately exceeds its (+37% on the day it
+//!    was fixed), while input/cache_write/cache_read still match exactly.
 //!  * DON'T FOLLOW SYMLINKS when walking. Some project dirs are symlinks to
 //!    others (created when a project is renamed/moved).
 //!  * PROJECT = THE GIT ROOT of `cwd`, not `cwd` itself: 10% of sessions record
@@ -29,7 +39,7 @@
 //!
 //! All aggregation is pure and unit-tested; only the walk/read is I/O.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -494,6 +504,53 @@ fn git_root(cwd: &str) -> String {
     }
 }
 
+/// Global dedup over every record in the scan — see the module header.
+///
+/// Claude Code writes one JSONL line per content block of a streamed assistant
+/// message, all sharing `(message.id, requestId)`. The early lines carry the
+/// usage known at `message_start` — an `output_tokens` of 1–3 — and only the
+/// last re-emission carries the final accounting. Keeping the first line lost
+/// 25.2% of all output tokens on this archive (18.7M of 74.4M; 16,474 of
+/// 69,732 groups). So the MOST COMPLETE snapshot wins: the one with the most
+/// output tokens, since output only grows while a message streams (measured:
+/// the max is the last line in every group, and never ties with a line that
+/// differs elsewhere). It is taken whole rather than as a per-field max
+/// because the final accounting can also *lower* a field (measured:
+/// `cache_creation` 4520 → 1809 on a subagent line) and a per-field max would
+/// stitch a total no API response ever carried. Exact copies across files (the
+/// 2.3x/4.1x case) tie, so the first occurrence keeps its identity.
+#[derive(Default)]
+struct Dedup {
+    index: HashMap<String, usize>,
+    records: Vec<Record>,
+}
+
+impl Dedup {
+    fn push(&mut self, r: Record) {
+        let Some(k) = r.dedup_key.clone() else {
+            self.records.push(r);
+            return;
+        };
+        match self.index.get(&k) {
+            Some(&i) => {
+                // A later re-emission with more output is the more complete
+                // snapshot of the same message; take its accounting whole.
+                if r.tokens.output > self.records[i].tokens.output {
+                    self.records[i].tokens = r.tokens;
+                }
+            }
+            None => {
+                self.index.insert(k, self.records.len());
+                self.records.push(r);
+            }
+        }
+    }
+
+    fn into_records(self) -> Vec<Record> {
+        self.records
+    }
+}
+
 fn scan(window_start: f64, window_end: f64) -> SessionsView {
     let Some(root) = projects_dir() else {
         return SessionsView::Error {
@@ -510,8 +567,7 @@ fn scan(window_start: f64, window_end: f64) -> SessionsView {
     candidate_files(&root, window_start, &mut files);
     let files_scanned = files.len();
 
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut records: Vec<Record> = Vec::new();
+    let mut dedup = Dedup::default();
     let mut titles: HashMap<String, String> = HashMap::new();
 
     for path in &files {
@@ -538,18 +594,13 @@ fn scan(window_start: f64, window_end: f64) -> SessionsView {
             if r.ts < window_start || r.ts > window_end {
                 continue;
             }
-            // GLOBAL dedup — see the module header.
-            if let Some(k) = &r.dedup_key {
-                if !seen.insert(k.clone()) {
-                    continue;
-                }
-            }
-            records.push(r);
+            // GLOBAL dedup — see the module header and `Dedup`.
+            dedup.push(r);
         }
     }
 
     let mut roots: HashMap<String, String> = HashMap::new();
-    let mut summary = aggregate(records, (window_start, window_end), |cwd| {
+    let mut summary = aggregate(dedup.into_records(), (window_start, window_end), |cwd| {
         if let Some(hit) = roots.get(cwd) {
             return hit.clone();
         }
@@ -733,8 +784,13 @@ mod tests {
     /// Then compare with:
     ///   npx -y ccusage@14 daily --json --breakdown --since <YYYYMMDD>
     ///
-    /// The numbers must match per model to within a rounding error; a mismatch
-    /// means the dedup key or the window filter regressed.
+    /// Input, cache_write and cache_read must match per model to within a
+    /// rounding error; a mismatch there means the dedup key or the window
+    /// filter regressed. OUTPUT is expected to be HIGHER than ccusage@14's —
+    /// it keeps the first (partial) line of a re-emitted message, we keep the
+    /// most complete one (see `Dedup`). Measured 2026-09-09: in/cw/cr exact on
+    /// all four models; output 1,434,683 vs 1,047,584 (+37%), two models
+    /// identical and opus-5 +45%.
     #[test]
     #[ignore]
     fn reconcile_with_ccusage() {
@@ -775,6 +831,79 @@ mod tests {
         for p in s.projects.iter().take(10) {
             println!("  {:<44} out={:>10} req={:>5}", p.name, p.tokens.output, p.requests);
         }
+    }
+
+    fn usage_line(mid: &str, rid: &str, session: &str, t: Tokens) -> String {
+        format!(
+            r#"{{"timestamp":"2026-08-08T17:00:00Z","sessionId":"{session}","cwd":"/p",
+                "requestId":"{rid}","message":{{"id":"{mid}","model":"claude-opus-5",
+                "usage":{{"input_tokens":{},"output_tokens":{},
+                "cache_creation_input_tokens":{},"cache_read_input_tokens":{}}}}}}}"#,
+            t.input, t.output, t.cache_write, t.cache_read
+        )
+        .replace('\n', "")
+    }
+
+    fn dedup(lines: &[String]) -> Vec<Record> {
+        let mut d = Dedup::default();
+        for l in lines {
+            d.push(parse_record(l).unwrap());
+        }
+        d.into_records()
+    }
+
+    #[test]
+    fn dedup_keeps_the_most_complete_snapshot_of_a_streamed_message() {
+        // One line per content block, same (message.id, requestId); the early
+        // lines carry the partial output count and only the last the real one.
+        // First-wins kept the 3 — measured 25.2% of all output tokens lost.
+        let lines: Vec<String> = [3, 3, 3, 2055]
+            .iter()
+            .map(|&out| line("m1", "r1", "s1", "/p", out))
+            .collect();
+        let recs = dedup(&lines);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].tokens.output, 2055);
+    }
+
+    #[test]
+    fn dedup_takes_the_final_accounting_whole_not_a_per_field_max() {
+        // The final snapshot can LOWER a field (seen on a subagent transcript:
+        // cache_creation 4520 → 1809). A per-field max would report a total no
+        // API response ever carried.
+        let partial = Tokens { input: 2, output: 3, cache_write: 4520, cache_read: 78525 };
+        let fin = Tokens { input: 514, output: 1797, cache_write: 1809, cache_read: 78525 };
+        let recs = dedup(&[
+            usage_line("m1", "r1", "s1", partial),
+            usage_line("m1", "r1", "s1", partial),
+            usage_line("m1", "r1", "s1", fin),
+        ]);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].tokens, fin);
+    }
+
+    #[test]
+    fn dedup_counts_exact_copies_once_and_keeps_the_first_identity() {
+        // The same message shows up in several files (2.3x on a main session,
+        // 4.1x on a subagent file) with identical usage.
+        let recs = dedup(&[
+            line("m1", "r1", "main", "/p", 40),
+            line("m1", "r1", "subagent-copy", "/p", 40),
+            line("m1", "r1", "subagent-copy", "/p", 40),
+        ]);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].session_id, "main");
+        assert_eq!(recs[0].tokens.output, 40);
+    }
+
+    #[test]
+    fn dedup_always_counts_records_without_a_key() {
+        let mut r = parse_record(&line("m1", "r1", "s1", "/p", 1)).unwrap();
+        r.dedup_key = None;
+        let mut d = Dedup::default();
+        d.push(r.clone());
+        d.push(r);
+        assert_eq!(d.into_records().len(), 2);
     }
 
     #[test]
