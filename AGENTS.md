@@ -63,12 +63,8 @@ Per-project/per-session usage, read straight from the JSONL transcripts. Correct
 - **A number that misleads is worse than no number.** Credits render a bar only when actually spendable — the percentage is share of the spend cap, so it read as "half left" while the account was out of credits.
 
 ## Architecture
-- `src-tauri/src/usage.rs` — `get_usage` (rate-limit %, pure `parse_rate_limit`) + `get_cost` (ccusage, pure `parse_cost`) + Keychain token read + PATH resolution. All parsers unit-tested against `tests/fixtures/{active,idle}.json`.
-- `src-tauri/src/lib.rs` — window config + `top_right_pos` (logical, origin-monitor) + **position persistence** (`window.json` in `app_config_dir`, saved on `WindowEvent::Moved`, restored in `setup`) + `set_pinned`/`apply_pip` (PiP) + **`set_glass`** (optional native vibrancy via `window-vibrancy` + contentView-layer corner-clip).
 - `src/` (vanilla HTML/CSS/JS) — view state machine `compact|info|creature|settings|connect` (`data-view`), `data-state` overlays, canvas **animation engine** (palette-indexed 20×20 frames from `src/assets/animations/*.json`, **driven by `requestAnimationFrame`** with a per-frame `hold` gate; mascot **mood = burn-rate**), `setSize` on view change. Alert zones via `data-zone`; binding marker via `data-binding`; glass via `data-glass` (`--card-bg`/`--panel` translucent). Drag via `data-tauri-drag-region="deep"` (buttons block naturally; mascot canvas opts out with `="false"`). Test hooks `__cuwRender`/`__cuwRenderCost`.
-- Assets: `src/assets/fonts/` (Tiempos, StyreneB), `src/assets/animations/` (13 Clawd JSON) — from upstream Clawdmeter (private use).
 
 ## Docs
 - `REFERENCE.md` — origin credit + the DECISION 2026-06-10 (faithful clone, private-only).
 - `docs/archive/spec.md`, `docs/archive/implementation-plan.md` — original (cost-based MVP) history; superseded by the rate-limit clone.
-- `docs/screenshots/` — compact / info-expanded / creature / connect / settings-dark / settings-light.

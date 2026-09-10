@@ -180,3 +180,56 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     hide_dock_icon(app);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Click-outside dismissal
+//
+// The widget is a NON-ACTIVATING NSPanel: it never becomes the key window, so
+// `WindowEvent::Focused(false)` never fires and the usual popover trick doesn't
+// exist here. The only reliable signal is a global NSEvent monitor.
+//
+// A GLOBAL monitor sees only events delivered to OTHER applications — clicks on
+// the widget itself and on our own status item never reach it. That is exactly
+// the semantics wanted, and it means no filtering by location is needed.
+//
+// Mouse events need no Accessibility permission (keyboard events would).
+// ---------------------------------------------------------------------------
+#[cfg(target_os = "macos")]
+pub fn install_click_outside_dismiss(app: &AppHandle) {
+    use block::ConcreteBlock;
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    // NSEventTypeLeftMouseDown = 1, RightMouseDown = 3, OtherMouseDown = 25.
+    const MASK: u64 = (1 << 1) | (1 << 3) | (1 << 25);
+
+    let app = app.clone();
+    let handler = ConcreteBlock::new(move |_event: *mut Object| {
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        if !window.is_visible().unwrap_or(false) {
+            return;
+        }
+        // Pinned means "stay put" — dismissing it would defeat the pin.
+        if *app.state::<crate::Pinned>().0.lock().unwrap() {
+            return;
+        }
+        let _ = window.hide();
+    });
+    let handler = handler.copy();
+    unsafe {
+        let _: *mut Object = msg_send![
+            class!(NSEvent),
+            addGlobalMonitorForEventsMatchingMask: MASK
+            handler: &*handler
+        ];
+    }
+    // Deliberately leaked: the monitor must outlive this call and lives for the
+    // whole process. Dropping the block would leave NSEvent holding a dangling
+    // pointer and crash on the next click anywhere on the system.
+    std::mem::forget(handler);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn install_click_outside_dismiss(_app: &AppHandle) {}

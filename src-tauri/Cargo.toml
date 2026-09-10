@@ -33,6 +33,10 @@ urlencoding = "2"
 # Raw NSWindow access to make the widget a PiP-style window (all Spaces +
 # floats over fullscreen apps) via setCollectionBehavior:.
 objc = "0.2"
+# ObjC block, needed to hand NSEvent a handler closure. The widget is a
+# non-activating NSPanel: it never becomes key, so `Focused(false)` never fires
+# and "hide when you click elsewhere" has to come from a global event monitor.
+block = "0.1"
 # Converts the window to a real NSPanel so a non-activating overlay can float
 # over OTHER apps' fullscreen Spaces (regular windows are blocked from those).
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }

@@ -491,6 +491,7 @@ name = "claude-usage-widget"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "block",
  "objc",
  "rand 0.8.6",
  "serde",

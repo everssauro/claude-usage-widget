@@ -233,7 +233,7 @@ fn flush_position(app: &AppHandle) {
 // ---------------------------------------------------------------------------
 
 /// Whether PiP (pin) mode is on — so it can be re-asserted on window focus.
-struct Pinned(Mutex<bool>);
+pub struct Pinned(pub Mutex<bool>);
 
 /// PiP mode (the pin toggle): when `on`, the widget is visible on **every Space**
 /// (follows you when you switch desktops), floats **over fullscreen apps**, and
@@ -257,7 +257,14 @@ fn apply_pip(window: &tauri::WebviewWindow, on: bool) {
     // later — which is why "floats over other apps' fullscreen Spaces" never
     // actually held. The level is set synchronously via objc below instead.
     //
-    // Managed CanJoinAllSpaces (persists across Space switches).
+    // NOTE: we also do NOT call `set_visible_on_all_workspaces`. It ORs
+    // CanJoinAllSpaces into whatever collectionBehavior is already there,
+    // without clearing MoveToActiveSpace — and AppKit REJECTS that pair in
+    // `-[NSWindow _validateCollectionBehavior:]` by throwing, which aborts the
+    // process. It crashed three times on 2026-09-04 before the cause was read
+    // out of the .ips backtrace. The single objc write below computes a valid
+    // behavior in one shot, so the invalid intermediate state never exists.
+    #[cfg(not(target_os = "macos"))]
     let _ = window.set_visible_on_all_workspaces(on);
 
     #[cfg(target_os = "macos")]
@@ -297,20 +304,66 @@ const NS_SCREEN_SAVER_WINDOW_LEVEL: i64 = 1000;
 /// and adds fullscreen-overlay + stationary. FullScreenAuxiliary stays on even
 /// when unpinned so the widget can still overlay a fullscreen Space.
 #[cfg(target_os = "macos")]
+/// Pure: current collectionBehavior + pinned → the behavior to write.
+///
+/// AppKit THROWS from `-[NSWindow _validateCollectionBehavior:]` if
+/// CanJoinAllSpaces and MoveToActiveSpace are set together, and an ObjC
+/// exception here aborts the process — it did, three times, on 2026-09-04.
+/// Hence one shot that can never produce that pair, rather than read-modify
+/// -write steps that pass through it.
+fn pip_behavior(cur: u64, on: bool) -> u64 {
+    let base = cur | FULLSCREEN_AUXILIARY | STATIONARY;
+    if on {
+        // Pinned is on every Space already: MoveToActiveSpace is meaningless
+        // there, and illegal alongside CanJoinAllSpaces.
+        (base | CAN_JOIN_ALL_SPACES) & !MOVE_TO_ACTIVE_SPACE
+    } else {
+        (base | MOVE_TO_ACTIVE_SPACE) & !CAN_JOIN_ALL_SPACES
+    }
+}
+
 unsafe fn desired_pip(ns_window: *mut objc::runtime::Object, on: bool) -> (u64, i64) {
     use objc::{msg_send, sel, sel_impl};
     let cur: u64 = msg_send![ns_window, collectionBehavior];
-    let base = cur | FULLSCREEN_AUXILIARY | STATIONARY;
     (
-        if on {
-            // Pinned: on every Space already, so MoveToActiveSpace is both
-            // meaningless and illegal alongside CanJoinAllSpaces.
-            (base | CAN_JOIN_ALL_SPACES) & !MOVE_TO_ACTIVE_SPACE
-        } else {
-            (base | MOVE_TO_ACTIVE_SPACE) & !CAN_JOIN_ALL_SPACES
-        },
+        pip_behavior(cur, on),
         if on { NS_SCREEN_SAVER_WINDOW_LEVEL } else { 0 },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pair AppKit rejects must be unreachable from ANY starting state —
+    /// including one that already carries the wrong bit, which is exactly how
+    /// the crash happened (tao ORed CanJoinAllSpaces onto a behavior that
+    /// already had MoveToActiveSpace).
+    #[test]
+    fn pip_behavior_never_sets_both_space_bits() {
+        let both = CAN_JOIN_ALL_SPACES | MOVE_TO_ACTIVE_SPACE;
+        for cur in [
+            0,
+            CAN_JOIN_ALL_SPACES,
+            MOVE_TO_ACTIVE_SPACE,
+            both,
+            both | FULLSCREEN_AUXILIARY | STATIONARY,
+            u64::MAX,
+        ] {
+            for on in [true, false] {
+                let got = pip_behavior(cur, on);
+                assert_ne!(got & both, both, "cur={cur:#x} on={on} produced both bits");
+                if on {
+                    assert_eq!(got & CAN_JOIN_ALL_SPACES, CAN_JOIN_ALL_SPACES);
+                } else {
+                    assert_eq!(got & MOVE_TO_ACTIVE_SPACE, MOVE_TO_ACTIVE_SPACE);
+                }
+                // The PiP bits survive regardless.
+                assert_eq!(got & FULLSCREEN_AUXILIARY, FULLSCREEN_AUXILIARY);
+                assert_eq!(got & STATIONARY, STATIONARY);
+            }
+        }
+    }
 }
 
 /// Re-assert PiP on focus **only if macOS actually drifted**. The `Focused(true)`
@@ -632,6 +685,9 @@ pub fn run() {
             // have no window, no tile and no icon.
             if let Err(e) = tray::build(app.handle()) {
                 eprintln!("tray icon unavailable: {e}");
+            } else {
+                // Only worth arming once there's an icon to bring it back with.
+                tray::install_click_outside_dismiss(app.handle());
             }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
