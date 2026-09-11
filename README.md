@@ -65,7 +65,7 @@ Update later: `git pull && npm run tauri build`.
 ## How it works
 
 - **Usage** — reads your Claude Code OAuth token (macOS Keychain `Claude Code-credentials`, or the widget's own login) and calls `GET /api/oauth/usage`, the same undocumented endpoint the official client uses. It returns a generic `limits[]` array (session / weekly / model-scoped) plus credits as real money. Because it's a **GET**, polling no longer spends the quota it measures. If that endpoint ever disappears it falls back to the old `anthropic-ratelimit-unified-*` response headers. Subscription auth, not API-billed.
-- **Per-project breakdown** — reads Claude Code's own JSONL transcripts in `~/.claude/projects` directly, deduplicating on `(message.id, requestId)` globally and attributing each session to its **git root**. It reconciles with `ccusage` to within 0.07% and is ~10x faster, because it only touches files that could fall in the window.
+- **Per-project breakdown** — reads Claude Code's own JSONL transcripts in `~/.claude/projects` directly, deduplicating on `(message.id, requestId)` globally (a streamed message is re-written once per content block with a partial `output_tokens`, so the most complete line wins — first-wins under-counted output by 25% here) and attributing each session to its **git root**. It reconciles with `ccusage` to within 0.07% and is ~10x faster, because it only touches files that could fall in the window.
 - **Cost panel** — runs `ccusage@14` against your local transcripts (offline, only while the panel is open, on a 5-minute cadence behind a cache and a kill deadline). Needs `node`/`npx` available.
 - **Nothing leaves your machine** beyond the usage call to Anthropic. Groups live in `groups.json` next to the window position.
 
@@ -79,7 +79,7 @@ This is a software reimplementation of **[HermannBjorgvin/Clawdmeter](https://gi
 
 ```bash
 npm run tauri dev                                  # run with hot reload
-cargo test --manifest-path src-tauri/Cargo.toml    # 33 unit tests — the gate
+cargo test --manifest-path src-tauri/Cargo.toml    # 39 unit tests — the gate
 
 # reconcile the transcript aggregator against ccusage on real data
 cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture reconcile
